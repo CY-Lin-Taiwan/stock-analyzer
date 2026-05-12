@@ -1,0 +1,265 @@
+"""
+AI 分析模組:論點 Stress Test
+使用 Gemini 對照使用者寫的論點 vs 實際財報/籌碼資料,給出客觀對照分析
+"""
+import os
+import json
+from datetime import datetime
+from dotenv import load_dotenv
+import google.generativeai as genai
+import pandas as pd
+
+load_dotenv()
+
+# 設定 Gemini
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
+
+
+def build_stress_test_prompt(
+    symbol: str,
+    name: str,
+    industry: str,
+    thesis: dict,
+    valuation: dict,
+    monthly_rev: list,
+    quarterly_fin: list,
+    chips: dict,
+) -> str:
+    """組裝 stress test prompt(對抗性強化版)"""
+    
+    # === 整理月營收(含歷史 min/max 當參考)===
+    rev_text = "無資料"
+    if monthly_rev:
+        rev_lines = []
+        for r in monthly_rev[-6:]:
+            yoy = r.get("revenue_yoy")
+            yoy_str = f"YoY {yoy:+.1f}%" if yoy is not None else "YoY N/A"
+            rev_lines.append(f"  - {r['year_month']}: {r['revenue']/1e8:,.1f} 億 ({yoy_str})")
+        
+        # 加上歷史對照
+        all_revs = [r["revenue"] for r in monthly_rev if r.get("revenue")]
+        if all_revs:
+            rev_max = max(all_revs) / 1e8
+            rev_min = min(all_revs) / 1e8
+            rev_lines.append(f"  - [歷史對照] 最高 {rev_max:,.1f} 億 / 最低 {rev_min:,.1f} 億")
+        rev_text = "\n".join(rev_lines)
+    
+    # === 整理季報(含 EPS 歷史 min/max)===
+    fin_text = "無資料"
+    if quarterly_fin:
+        fin_lines = []
+        for q in quarterly_fin[-4:]:
+            eps = q.get("eps", "N/A")
+            gm = q.get("gross_margin")
+            roe = q.get("roe")
+            gm_str = f"{gm:.2f}%" if gm is not None else "N/A"
+            roe_str = f"{roe:.2f}%" if roe is not None else "N/A"
+            fin_lines.append(
+                f"  - {q['year_quarter']}: EPS {eps} | 毛利率 {gm_str} | ROE {roe_str}"
+            )
+        
+        # 加 EPS 歷史對照
+        all_eps = [q["eps"] for q in quarterly_fin if q.get("eps") is not None]
+        if all_eps:
+            eps_max = max(all_eps)
+            eps_min = min(all_eps)
+            fin_lines.append(f"  - [歷史對照] EPS 最高 {eps_max:.2f} / 最低 {eps_min:.2f} (近 {len(all_eps)} 季)")
+        fin_text = "\n".join(fin_lines)
+    
+    # === 籌碼面 ===
+    chips_text = "無資料"
+    if chips:
+        chips_text = (
+            f"  - 外資 5 日累計: {chips.get('foreign_5d', 0):+,.0f} 張\n"
+            f"  - 投信 5 日累計: {chips.get('trust_5d', 0):+,.0f} 張\n"
+            f"  - 連續 {chips.get('consecutive_days', 0)} 天{chips.get('direction', '無')}\n"
+            f"  - 融資 30 日變化: {chips.get('margin_change_pct', 0):+.1f}%\n"
+            f"  - 外資持股比: {chips.get('foreign_holding', 'N/A')}%"
+        )
+    
+    prompt = f"""你是一位**極度嚴格、抱持懷疑態度**的台股分析師。你的任務不是討好使用者,而是用客觀事實**挑戰**使用者的論點。
+
+# 個股資訊
+- 代號: {symbol}
+- 名稱: {name}  
+- 產業: {industry}
+
+# 使用者的投資論點(待審視)
+
+## 核心論點
+{thesis.get('thesis', '(未填寫)')}
+
+## 護城河
+{thesis.get('moat', '(未填寫)')}
+
+## 主要風險
+{thesis.get('risks', '(未填寫)')}
+
+# 客觀事實資料
+
+## 估值現況
+- 現價: {valuation.get('close', 'N/A')}
+- PE: {valuation.get('pe', 'N/A')}
+- PB: {valuation.get('pb', 'N/A')}
+- 殖利率: {valuation.get('dividend_yield', 'N/A')}%
+
+## 近 6 個月營收(含歷史對照)
+{rev_text}
+
+## 近 4 季財務(含歷史對照)
+{fin_text}
+
+## 近期籌碼面
+{chips_text}
+
+# 任務:嚴格 Stress Test
+
+請扮演**魔鬼代言人**,對使用者論點做以下處理。輸出**純 JSON,不要包 markdown 也不要前後加文字**:
+
+{{
+  "validated_points": [
+    {{"point": "論點原文(節錄)", "evidence": "**只有事實明確強力支持**才放這。要引具體數字。"}}
+  ],
+  "challenged_points": [
+    {{"point": "論點原文(節錄)", "evidence": "事實部分支持但有重大疑慮的點。要說清楚疑慮在哪、用什麼數字佐證。"}}
+  ],
+  "refuted_points": [
+    {{"point": "論點原文(節錄)", "evidence": "事實**明確反駁**的點。直接打臉,不要客氣。"}}
+  ],
+  "blind_spots": [
+    "使用者**沒寫進論點但應該注意**的事實(例如基期效應、季節性、產業週期位置)。至少列 1 個。"
+  ],
+  "overall_assessment": "1-2 段話,**直接給出 framing**。例如:『你的論點有 X 對 Y 錯,核心問題在 Z。』不要打太極。",
+  "recommendation": "從 [維持持有觀察] [重新校準論點] [增強警覺] [警示風險] 任選一個,並用一句話說明為什麼"
+}}
+
+# 嚴格規則(違反會被視為失敗)
+
+1. **預設懷疑模式**:不要被使用者的「敘事」帶著走。事實才是裁判。
+2. **數字硬碰硬**:每個 evidence 都要有具體數字。沒數字的話寫「資料不足無法判斷」不要硬掰。
+3. **不要兩邊各打 50 大板**:如果證據明確指向一邊,就要明說。模糊不清的話一律歸 challenged。
+4. **必須至少標出 1 個 blind_spot**:這是強制規則。
+5. **景氣循環股特別警覺**:
+   - EPS 跟前年比要看「前年是不是疫情爆衝期」(基期扭曲)
+   - 看到「PE 低 + 殖利率高」要警告「景氣循環頂部反指標」
+   - 看到「外資連續買超」不要直接視為利多,要看是否在循環下行段
+6. **籌碼面要平衡解讀**:外資連買 ≠ 利多。要看股價位階、籌碼結構同步性。
+7. **拒絕「需要更多資料」這種 cop-out 答案**:用現有資料盡可能下判斷。如果真的不夠,在 evidence 裡明說「現有資料下,建議補充 XXX」而不是空話。
+"""
+    return prompt
+
+
+def run_stress_test(
+    symbol: str,
+    name: str,
+    industry: str,
+    thesis: dict,
+    valuation: dict,
+    monthly_rev: list,
+    quarterly_fin: list,
+    chips: dict,
+    model_name: str = None,
+) -> dict:
+    """
+    執行論點 stress test
+    
+    回傳:
+        {
+            "success": bool,
+            "data": dict (analysis result) or None,
+            "error": str or None,
+            "tokens": {"input": int, "output": int, "total": int},
+            "model": str,
+        }
+    """
+    if model_name is None:
+        model_name = DEFAULT_MODEL
+    
+    prompt = build_stress_test_prompt(
+        symbol, name, industry, thesis, valuation,
+        monthly_rev, quarterly_fin, chips
+    )
+    
+    try:
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": 0.3,  # 較低 temperature,提高一致性
+                "response_mime_type": "application/json",
+            }
+        )
+        
+        # 解析 JSON
+        try:
+            data = json.loads(response.text)
+        except json.JSONDecodeError as e:
+            return {
+                "success": False,
+                "data": None,
+                "error": f"AI 回傳非 JSON 格式: {e}\n原始回應: {response.text[:500]}",
+                "tokens": {},
+                "model": model_name,
+            }
+        
+        # Token 用量
+        tokens = {}
+        if hasattr(response, "usage_metadata"):
+            tokens = {
+                "input": response.usage_metadata.prompt_token_count,
+                "output": response.usage_metadata.candidates_token_count,
+                "total": response.usage_metadata.total_token_count,
+            }
+        
+        return {
+            "success": True,
+            "data": data,
+            "error": None,
+            "tokens": tokens,
+            "model": model_name,
+        }
+    
+    except Exception as e:
+        return {
+            "success": False,
+            "data": None,
+            "error": str(e),
+            "tokens": {},
+            "model": model_name,
+        }
+
+
+# CLI 測試:可以直接執行這個檔案測試
+if __name__ == "__main__":
+    # 簡單測試
+    fake_thesis = {
+        "thesis": "看好長榮在景氣循環中的結構性優勢",
+        "moat": "Ocean Alliance 全球第一、美國自有碼頭",
+        "risks": "川普關稅持續、運價年約能否守住",
+    }
+    fake_valuation = {"close": 213.5, "pe": 6.74, "pb": 1.5, "dividend_yield": 7.49}
+    fake_chips = {
+        "foreign_5d": 21828,
+        "trust_5d": -2717,
+        "consecutive_days": 8,
+        "direction": "買超",
+        "margin_change_pct": -13.8,
+        "foreign_holding": 21.16,
+    }
+    
+    result = run_stress_test(
+        symbol="2603", name="長榮", industry="航運",
+        thesis=fake_thesis,
+        valuation=fake_valuation,
+        monthly_rev=[],  # 簡化測試
+        quarterly_fin=[],
+        chips=fake_chips,
+    )
+    
+    if result["success"]:
+        print("\n✅ Stress test 成功!\n")
+        print(json.dumps(result["data"], ensure_ascii=False, indent=2))
+        print(f"\n📊 Token 用量: {result['tokens']}")
+    else:
+        print(f"\n❌ 失敗: {result['error']}")

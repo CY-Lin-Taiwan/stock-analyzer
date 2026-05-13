@@ -32,42 +32,64 @@ supabase = create_client(supabase_url, supabase_key)
 # 2. 身分識別與門禁邏輯
 # ==========================================
 def authenticate_user():
-    """處理身分識別與密碼驗證"""
-    # 從 URL 抓取使用者 ID (預設為 'guest')
-    user_id = st.query_params.get("user", "guest")
-
-    # 定義身分對照表 (目前先單純分為管理員與親友)
-    user_mapping = {
-        "me": "管理員",
-        "family": "親友觀測站",
-        "guest": "訪客模式"
-    }
+    """處理身分識別與密碼驗證
     
-    current_user_name = user_mapping.get(user_id, "未授權訪客")
-
-    # 寫入 session_state 供後續全域使用
+    設計:
+      - 共用密碼 16888 (信任使用者不會自己改 URL)
+      - URL ?user=alice 區分各自資料
+      - 親友各自拿到專屬網址,進入後輸入密碼
+    """
+    # 從 URL 抓取 user_id
+    user_id = st.query_params.get("user", "")
+    
+    # 沒帶 user 參數 → 拒絕
+    if not user_id:
+        st.title("🔒 投資者專屬通道")
+        st.error("❌ 找不到使用者識別")
+        st.caption("請使用提供給你的專屬網址,格式: `https://your-app.com/?user=你的代號`")
+        st.stop()
+    
+    # 顯示名(可選,從 secrets 撈,沒設定就用 user_id)
+    try:
+        display_name = st.secrets.get("user_names", {}).get(user_id, user_id)
+    except Exception:
+        display_name = user_id
+    
+    # 寫入 session_state
     st.session_state["user_id"] = user_id
-    st.session_state["user_name"] = current_user_name
-
+    st.session_state["user_name"] = display_name
+    
     # 密碼門禁
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
-
+    
     if st.session_state["password_correct"]:
         return True
-
+    
     # 顯示登入介面
-    st.title(f"🔒 {current_user_name} 專屬通道")
+    st.title(f"🔒 {display_name} 專屬通道")
     password = st.text_input("請輸入訪問密碼", type="password")
     
-    if st.button("登入"):
-        if password == "16888":
+    if st.button("登入", type="primary"):
+        # 從 secrets 撈密碼(若沒設定就用預設 16888)
+        try:
+            valid_password = st.secrets.get("auth", {}).get("password", "16888")
+        except Exception:
+            valid_password = "16888"
+        
+        if password == valid_password:
             st.session_state["password_correct"] = True
             st.rerun()
         else:
-            st.error("❌ 密碼錯誤，請重新輸入")
+            st.error("❌ 密碼錯誤,請重新輸入")
     
-    st.stop() # 密碼不正確就停止執行後續代碼
+    st.stop()
+
+
+def get_user_id():
+    """取得當前已認證的 user_id (供所有 query 使用)"""
+    return st.session_state.get("user_id", "")
+
 
 # 執行門禁驗證
 authenticate_user()
@@ -118,17 +140,25 @@ supabase = get_supabase()
 # 資料存取
 # ============================================================
 @st.cache_data(ttl=300)
-def load_stocks():
-    return supabase.table("stocks").select("*").order("symbol").execute().data
+def load_stocks(user_id: str = None):
+    """讀追蹤股票清單(個人資料,需 user_id 篩選)"""
+    if user_id is None:
+        user_id = get_user_id()
+    return supabase.table("stocks").select("*").eq("user_id", user_id).order("symbol").execute().data
 
 @st.cache_data(ttl=300)
-def load_transactions():
-    return supabase.table("transactions").select("*").execute().data
+def load_transactions(user_id: str = None):
+    """讀交易紀錄(個人資料,需 user_id 篩選)"""
+    if user_id is None:
+        user_id = get_user_id()
+    return supabase.table("transactions").select("*").eq("user_id", user_id).execute().data
 
 @st.cache_data(ttl=300)
-def load_latest_valuation():
-    """取每檔最新一筆股價+PE+PB+殖利率"""
-    stocks = supabase.table("stocks").select("symbol").execute().data
+def load_latest_valuation(user_id: str = None):
+    """取每檔最新一筆股價+PE+PB+殖利率 (只看當前 user 的追蹤清單)"""
+    if user_id is None:
+        user_id = get_user_id()
+    stocks = supabase.table("stocks").select("symbol").eq("user_id", user_id).execute().data
     symbols = [s["symbol"] for s in stocks]
     
     result = {}
@@ -262,13 +292,14 @@ def load_prices(symbol):
 
 
 def calc_holdings():
-    txns = load_transactions()
+    user_id = get_user_id()
+    txns = load_transactions(user_id)
     if not txns:
         return pd.DataFrame()
     
-    # 1. 抓取 stocks 表中的基本資料 (包含手動股息)
+    # 1. 抓取 stocks 表中的基本資料 (包含手動股息) - 只看當前 user 的
     try:
-        stocks_data = supabase.table("stocks").select("symbol, name, industry, manual_dividend").execute().data
+        stocks_data = supabase.table("stocks").select("symbol, name, industry, manual_dividend").eq("user_id", user_id).execute().data
         df_stocks = pd.DataFrame(stocks_data)
     except Exception as e:
         st.error(f"無法讀取股票基本資料: {e}")
@@ -417,9 +448,9 @@ def page_portfolio_overview():
         return
     
     # 🌟 1. 載入 stocks 基本資料 (包含我們新增的 manual_dividend)
-    stocks_raw = load_stocks()
+    stocks_raw = load_stocks(get_user_id())
     stocks = {s["symbol"]: s for s in stocks_raw}
-    valuation = load_latest_valuation()
+    valuation = load_latest_valuation(get_user_id())
     
     # 🌟 2. 把資料對齊到 holdings DataFrame 中
     holdings["name"] = holdings["symbol"].map(lambda s: stocks.get(s, {}).get("name", s))
@@ -605,7 +636,7 @@ def page_portfolio_overview():
 # 頁面 2: 個股技術分析
 # ============================================================
 def page_stock_detail():
-    stocks = load_stocks()
+    stocks = load_stocks(get_user_id())
     stock_options = {f"{s['symbol']} {s['name']}": s['symbol'] for s in stocks}
     
     # 個股選擇 + 圖表設定都放在側邊欄(scroll 也能切換)
@@ -684,8 +715,8 @@ def page_stock_detail():
     change_pct = (change / prev["close"]) * 100
 
     # 算 holding_context (給 AI 觀察跟結果顯示用)
-    all_txns = load_transactions()
-    valuation = load_latest_valuation()
+    all_txns = load_transactions(get_user_id())
+    valuation = load_latest_valuation(get_user_id())
     val_data = valuation.get(selected_symbol, {})
     holding_ctx = ai_analyzer.build_holding_context(
     symbol=selected_symbol,
@@ -1284,7 +1315,7 @@ def page_stock_detail():
     
     # 取使用者論點(只用 time_horizon,不影響 AI 分析)
     thesis_data = supabase.table("theses") \
-        .select("*").eq("symbol", selected_symbol).execute().data
+        .select("*").eq("symbol", selected_symbol).eq("user_id", get_user_id()).execute().data
     current_thesis = thesis_data[0] if thesis_data else {}
     
     primary_horizon = current_thesis.get("time_horizon")
@@ -1316,7 +1347,7 @@ def page_stock_detail():
         session_key = f"ai_obs_{selected_symbol}"
         
         if session_key not in st.session_state:
-            history_obs = ai_analyzer.load_observations(selected_symbol, limit=1)
+            history_obs = ai_analyzer.load_observations(selected_symbol, limit=1, user_id=get_user_id())
             if history_obs:
                 latest = history_obs[0]
                 st.session_state[session_key] = {
@@ -1346,7 +1377,7 @@ def page_stock_detail():
             with st.spinner("🤖 AI 正在結合數據與前瞻事件進行觀察..."):
                 # 取資料
                 stock_info = next((s for s in stocks if s["symbol"] == selected_symbol), {})
-                val_data = load_latest_valuation().get(selected_symbol, {})
+                val_data = load_latest_valuation(get_user_id()).get(selected_symbol, {})
                 rev_df_ai = load_monthly_revenue(selected_symbol)
                 rev_list = rev_df_ai.to_dict("records") if not rev_df_ai.empty else []
                 qfin_df_ai = load_quarterly_financials(selected_symbol)
@@ -1389,7 +1420,7 @@ def page_stock_detail():
                 data_freshness = freshness.get("股價/PE", "未知")
                 
                 # === 計算 holding_context (持股事實 + 累積股息)===
-                all_txns = load_transactions()
+                all_txns = load_transactions(get_user_id())
                 holding_ctx = ai_analyzer.build_holding_context(
                     symbol=selected_symbol,
                     transactions=all_txns,
@@ -1428,6 +1459,7 @@ def page_stock_detail():
                         primary_horizon=primary_horizon,
                         result=result,
                         thesis_snapshot=thesis_obj,
+                        user_id=get_user_id(),
                     )
                     st.success("✅ AI 觀察完成!")
                     # 加入 created_at 時間戳
@@ -1475,7 +1507,7 @@ def page_stock_detail():
             )
         
         # === 歷史 AI 觀察紀錄 ===
-        history_list = ai_analyzer.load_observations(selected_symbol, limit=5)
+        history_list = ai_analyzer.load_observations(selected_symbol, limit=5, user_id=get_user_id())
         if len(history_list) > 1:
             st.divider()
             with st.expander(f"📜 歷史 AI 觀察紀錄 ({len(history_list)} 筆)"):
@@ -1720,7 +1752,7 @@ def page_thesis():
     st.title("📝 投資論點")
     st.caption("記錄你買進的理由,定期 review 論點是否仍然成立")
     
-    stocks = load_stocks()
+    stocks = load_stocks(get_user_id())
     if not stocks:
         st.warning("尚未有追蹤個股")
         return
@@ -1740,11 +1772,11 @@ def page_thesis():
     selected_symbol = stock_options[selected_label]
     
     existing = supabase.table("theses") \
-        .select("*").eq("symbol", selected_symbol).execute().data
+        .select("*").eq("symbol", selected_symbol).eq("user_id", get_user_id()).execute().data
     current = existing[0] if existing else {}
     
     # === Sticky 個股名稱(scroll 時固定在頂部)===
-    valuation = load_latest_valuation()
+    valuation = load_latest_valuation(get_user_id())
     val = valuation.get(selected_symbol, {})
     current_price = val.get("close")
     
@@ -1896,6 +1928,7 @@ def page_thesis():
         if submitted:
             data = {
                 "symbol": selected_symbol,
+                "user_id": get_user_id(),
                 "thesis": thesis or None,
                 "moat": moat or None,
                 "risks": risks or None,
@@ -1915,6 +1948,7 @@ def page_thesis():
         if mark_reviewed:
             supabase.table("theses").upsert({
                 "symbol": selected_symbol,
+                "user_id": get_user_id(),
                 "last_reviewed_at": datetime.now().isoformat()
             }).execute()
             st.cache_data.clear()
@@ -1922,7 +1956,7 @@ def page_thesis():
             st.rerun()
     
     # ===== 停損監控 =====
-    valuation = load_latest_valuation()
+    valuation = load_latest_valuation(get_user_id())
     current_price = valuation.get(selected_symbol, {}).get("close")
     
     if current_price and current.get("stop_loss"):
@@ -1948,7 +1982,7 @@ def page_thesis():
         st.warning("⚠️ 請先填寫核心論點,才能進行對照")
     else:
         # 撈這檔最近一次 AI 觀察
-        last_obs_list = ai_analyzer.load_observations(selected_symbol, limit=1)
+        last_obs_list = ai_analyzer.load_observations(selected_symbol, limit=1, user_id=get_user_id())
         
         if not last_obs_list:
             st.info(
@@ -2040,34 +2074,58 @@ def page_transactions():
     with tab1:
         st.subheader("新增一筆交易")
         
-        stocks = load_stocks()
-        if not stocks:
-            st.warning("尚未有追蹤股票,請先到「追蹤清單管理」新增")
-            return
+        stocks = load_stocks(get_user_id())
+        has_tracked = bool(stocks)
         
-        stock_options = {f"{s['symbol']} {s['name']}": s['symbol'] for s in stocks}
+        # === 模式選擇:從現有股票選 vs 新增股票 ===
+        if has_tracked:
+            mode = st.radio(
+                "選擇模式",
+                ["📌 從追蹤清單選擇", "➕ 新增還沒追蹤的股票"],
+                horizontal=True,
+                key="add_txn_mode",
+            )
+        else:
+            # 完全沒追蹤股票 → 直接走「新增」模式
+            mode = "➕ 新增還沒追蹤的股票"
+            st.info("👋 第一次新增交易?直接輸入持股資訊,系統會自動加入追蹤清單並抓取資料")
         
+        is_new_stock = (mode == "➕ 新增還沒追蹤的股票")
+        
+        # === Form 外:股票識別欄位(這樣選擇變化能即時反應)===
+        if is_new_stock:
+            st.markdown("**📈 新股票資訊**")
+            col_s1, col_s2, col_s3 = st.columns([1, 1, 2])
+            with col_s1:
+                new_symbol = st.text_input("代號 *", placeholder="例如 2317", max_chars=6, key="new_sym_in_txn")
+            with col_s2:
+                new_name = st.text_input("名稱 *", placeholder="例如 鴻海", key="new_name_in_txn")
+            with col_s3:
+                new_industry = st.text_input("產業(選填)", placeholder="例如 電子代工", key="new_ind_in_txn")
+            st.caption("⏳ 儲存後會自動跑 FinMind 同步近 3 年資料(約 30 秒)")
+        else:
+            stock_options = {f"{s['symbol']} {s['name']}": s['symbol'] for s in stocks}
+            selected_label = st.selectbox("個股 *", list(stock_options.keys()), key="sel_existing_stock")
+            symbol_from_select = stock_options[selected_label]
+        
+        # === Form 內:交易欄位 ===
         with st.form("new_txn_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
-                selected_label = st.selectbox("個股 *", list(stock_options.keys()))
-                symbol = stock_options[selected_label]
                 action = st.selectbox("動作 *", ["buy", "sell"], format_func=lambda x: "🟢 買進" if x == "buy" else "🔴 賣出")
                 txn_date = st.date_input("交易日期 *", value=datetime.now().date())
-            with col2:
                 shares = st.number_input("股數 *", min_value=1, value=1000, step=1)
+            with col2:
                 price = st.number_input("價格 *", min_value=0.01, value=100.0, step=0.5, format="%.2f")
-                
-                # 自動算手續費 (券商 0.1425%, 最低 20 元)
                 amount = shares * price
                 default_fee = max(20, round(amount * 0.001425))
                 fee = st.number_input("手續費", min_value=0, value=int(default_fee), step=1, help="預設 0.1425% 手續費,最低 20 元")
-            
-            # 賣出才有交易稅
-            tax = 0
-            if action == "sell":
-                tax = round(amount * 0.003)  # 證交稅 0.3%
-                st.info(f"💡 賣出證交稅 (0.3%): {tax:,} 元 (自動計算)")
+                
+                # 賣出才有交易稅
+                tax = 0
+                if action == "sell":
+                    tax = round(amount * 0.003)
+                    st.caption(f"💡 賣出證交稅 (0.3%): {tax:,} 元 (自動)")
             
             note = st.text_input("備註(選填)", placeholder="例如:第一次建倉、跌破均線出場...")
             
@@ -2081,12 +2139,67 @@ def page_transactions():
             - **{'買進總成本' if action == 'buy' else '賣出實得'}**: `{net_amount:,.0f}` 元
             """)
             
-            submitted = st.form_submit_button("💾 儲存交易", type="primary", use_container_width=True)
+            submitted = st.form_submit_button(
+                "💾 儲存交易" + (" + 同步資料" if is_new_stock else ""),
+                type="primary",
+                use_container_width=True,
+            )
             
             if submitted:
+                # === 決定 symbol ===
+                if is_new_stock:
+                    sym_input = (new_symbol or "").strip()
+                    name_input = (new_name or "").strip()
+                    ind_input = (new_industry or "").strip() or "未分類"
+                    
+                    if not sym_input or not name_input:
+                        st.error("❌ 代號跟名稱必填")
+                        st.stop()
+                    
+                    # 檢查當前 user 是否已有此股
+                    existing = supabase.table("stocks").select("symbol").eq("symbol", sym_input).eq("user_id", get_user_id()).execute().data
+                    if existing:
+                        st.error(f"⚠️ {sym_input} 已在你的追蹤清單,請改選「📌 從追蹤清單選擇」模式")
+                        st.stop()
+                    
+                    final_symbol = sym_input
+                    
+                    # 1. 加入 stocks
+                    try:
+                        supabase.table("stocks").insert({
+                            "symbol": final_symbol,
+                            "user_id": get_user_id(),
+                            "name": name_input,
+                            "industry": ind_input,
+                        }).execute()
+                    except Exception as e:
+                        st.error(f"❌ 加入追蹤清單失敗: {e}")
+                        st.stop()
+                    
+                    # 2. 跑 FinMind 同步(等完才繼續)
+                    with st.spinner(f"🔄 正在抓取 {final_symbol} {name_input} 近 3 年資料(約 30 秒)..."):
+                        try:
+                            result = subprocess.run(
+                                [sys.executable, "-c", 
+                                 f"from data_pipeline import sync_symbol; sync_symbol('{final_symbol}')"],
+                                capture_output=True, text=True, timeout=180
+                            )
+                            if result.returncode != 0:
+                                st.warning(f"⚠️ FinMind 同步未完全成功,但股票已加入。可稍後到側邊欄「同步最新資料」重試")
+                                with st.expander("查看同步 log"):
+                                    st.code(result.stderr[-1000:] if result.stderr else result.stdout[-1000:])
+                        except subprocess.TimeoutExpired:
+                            st.warning("⏰ 同步超過 3 分鐘,請稍後手動同步")
+                        except Exception as e:
+                            st.warning(f"⚠️ 同步異常: {e}")
+                else:
+                    final_symbol = symbol_from_select
+                
+                # === 寫入 transactions ===
                 try:
                     supabase.table("transactions").insert({
-                        "symbol": symbol,
+                        "symbol": final_symbol,
+                        "user_id": get_user_id(),
                         "date": str(txn_date),
                         "action": action,
                         "shares": int(shares),
@@ -2096,10 +2209,13 @@ def page_transactions():
                         "note": note or None,
                     }).execute()
                     st.cache_data.clear()
-                    st.success(f"✅ 已儲存:{txn_date} {selected_label} {action.upper()} {shares:,} 股 @ {price}")
+                    if is_new_stock:
+                        st.success(f"✅ 完成!已新增追蹤 {final_symbol} 並儲存交易")
+                    else:
+                        st.success(f"✅ 已儲存:{txn_date} {final_symbol} {action.upper()} {shares:,} 股 @ {price}")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"❌ 儲存失敗: {e}")
+                    st.error(f"❌ 儲存交易失敗: {e}")
     
     # ============================================
     # Tab 2: 交易紀錄(列表 + 編輯 + 刪除)
@@ -2107,13 +2223,13 @@ def page_transactions():
     with tab2:
         st.subheader("所有交易紀錄")
         
-        txns = supabase.table("transactions").select("*").order("date", desc=True).execute().data
+        txns = supabase.table("transactions").select("*").eq("user_id", get_user_id()).order("date", desc=True).execute().data
         
         if not txns:
             st.info("還沒有交易紀錄,到「新增交易」分頁建立第一筆")
         else:
             df_txns = pd.DataFrame(txns)
-            stocks_map = {s["symbol"]: s["name"] for s in load_stocks()}
+            stocks_map = {s["symbol"]: s["name"] for s in load_stocks(get_user_id())}
             df_txns["name"] = df_txns["symbol"].map(stocks_map)
             df_txns["amount"] = df_txns["shares"] * df_txns["price"]
             df_txns["action_label"] = df_txns["action"].map(lambda a: "🟢 買" if a == "buy" else "🔴 賣")
@@ -2178,7 +2294,7 @@ def page_transactions():
                     if st.button("🗑️ 刪除", type="secondary", use_container_width=True):
                         try:
                             txn_id = txn_options[selected_for_delete]
-                            supabase.table("transactions").delete().eq("id", txn_id).execute()
+                            supabase.table("transactions").delete().eq("id", txn_id).eq("user_id", get_user_id()).execute()
                             st.cache_data.clear()
                             st.success("✅ 已刪除")
                             st.rerun()
@@ -2190,6 +2306,10 @@ def page_transactions():
             with st.expander("✏️ 編輯現有交易與股利覆寫"):
              st.caption("選擇要編輯的交易，修改內容或更新今年預估股息")
     
+    # 保護:當 user 沒有交易紀錄時, txn_options 不會被定義,這裡補一個空 dict 避免 UnboundLocalError
+    if 'txn_options' not in dir():
+        txn_options = {}
+    
     if txn_options:
         edit_label = st.selectbox("選擇要編輯的交易", list(txn_options.keys()), key="edit_select")
         edit_id = txn_options[edit_label]
@@ -2198,7 +2318,7 @@ def page_transactions():
 
         # 🌟 額外步驟：去 stocks 表撈取目前的手動股息設定
         try:
-            stock_res = supabase.table("stocks").select("manual_dividend").eq("symbol", edit_sym).execute()
+            stock_res = supabase.table("stocks").select("manual_dividend").eq("symbol", edit_sym).eq("user_id", get_user_id()).execute()
             current_manual_div = stock_res.data[0]["manual_dividend"] if stock_res.data else 0.0
         except:
             current_manual_div = 0.0
@@ -2243,12 +2363,12 @@ def page_transactions():
                         "fee": int(e_fee),
                         "tax": int(e_tax),
                         "note": e_note or None,
-                    }).eq("id", edit_id).execute()
+                    }).eq("id", edit_id).eq("user_id", get_user_id()).execute()
 
                     # 2. 更新股票屬性 (stocks 表)
                     supabase.table("stocks").update({
                         "manual_dividend": e_manual_dividend
-                    }).eq("symbol", edit_sym).execute()
+                    }).eq("symbol", edit_sym).eq("user_id", get_user_id()).execute()
 
                     # 清除快取並刷新
                     st.cache_data.clear()
@@ -2263,7 +2383,7 @@ def page_transactions():
     with tab3:
         st.subheader("📈 追蹤清單管理")
         
-        stocks = load_stocks()
+        stocks = load_stocks(get_user_id())
         st.markdown(f"**目前追蹤 {len(stocks)} 檔個股**")
         
         # 顯示現有清單
@@ -2294,15 +2414,16 @@ def page_transactions():
                     st.error("❌ 代號跟名稱必填")
                 else:
                     new_symbol = new_symbol.strip()
-                    # 檢查是否已存在
-                    existing = supabase.table("stocks").select("symbol").eq("symbol", new_symbol).execute().data
+                    # 檢查當前 user 是否已有此股
+                    existing = supabase.table("stocks").select("symbol").eq("symbol", new_symbol).eq("user_id", get_user_id()).execute().data
                     if existing:
                         st.warning(f"⚠️ {new_symbol} 已在追蹤清單中")
                     else:
                         try:
-                            # 1. 新增到 stocks 表
+                            # 1. 新增到 stocks 表 (含 user_id)
                             supabase.table("stocks").insert({
                                 "symbol": new_symbol,
+                                "user_id": get_user_id(),
                                 "name": new_name.strip(),
                                 "industry": new_industry.strip() or "未分類",
                             }).execute()
@@ -2366,21 +2487,16 @@ def page_transactions():
                     if st.button("⚠️ 確認移除", type="primary", use_container_width=True):
                         try:
                             sym_to_remove = stock_to_remove_options[to_remove_label]
-                            # 刪除順序: 從最內層的關聯資料先刪
-                            supabase.table("transactions").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("theses").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("thesis_reviews").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("daily_prices").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("monthly_revenue").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("quarterly_financials").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("daily_chips").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("margin_balance").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("shareholding").delete().eq("symbol", sym_to_remove).execute()
-                            supabase.table("stocks").delete().eq("symbol", sym_to_remove).execute()
+                            uid = get_user_id()
+                            # 只刪當前 user 的個人資料,市場資料(daily_prices 等)是共用,不刪
+                            supabase.table("transactions").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            supabase.table("theses").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            supabase.table("thesis_reviews").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            supabase.table("stocks").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
                             
                             st.session_state[confirm_key] = False
                             st.cache_data.clear()
-                            st.success(f"✅ 已移除 {to_remove_label} 及所有相關資料")
+                            st.success(f"✅ 已從你的追蹤清單移除 {to_remove_label} (市場資料保留供共用)")
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ 移除失敗: {e}")

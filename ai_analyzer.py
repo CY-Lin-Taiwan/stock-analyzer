@@ -298,31 +298,14 @@ def build_observation_prompt(
 # 核心原則(極為重要,違反 = 失敗)
 
 1. **必須明確表態**:明確的整體立場(看多/看空/中性 + 信心度)。「兩面討好」是廢話。
-   - 但「明確表態」≠「刻意找碴」
-   - 你是「中立審計員」,不是「強制反對者」
-   - 看到證據強就支持,看到風險大就警示,看到模糊就明說「資料不足」
-   - 若財務數據與籌碼面同時極佳,該說 validated 就說 validated,然後轉向「未來什麼條件下這個榮景會結束?」(預演破局),而不是強行找碴
 2. **不是要你下決策**:給「判斷傾向」,不是叫使用者買賣
 3. **保持開放**:明確列出「什麼訊號會讓你改變想法」
 4. **前三區用列點**(處境/情境/訊號),不要堆砌敘述。質化分析放最終「綜合判斷」
 5. **情境必須給機率**:三個情境機率加總 = 100%
 6. **訊號用重要性標籤**:🔴 關鍵 / 🟡 重要 / 🟢 次要
 7. **使用最新資料** {freshness_note}
-8. **動態異常偵測(取代靜態模板)**:
-   - 看到極端數據組合(PE 極低 + 殖利率極高、PE 極高 + 毛利突破歷史、ROE 異常高、營收 YoY 異常等)時,**禁止直接套用「景氣循環頂部」「估值泡沫」「成長股泡沫」這種模板下結論**
-   - 改問:「當前定價反映了市場什麼預期? 這個預期跟基本面數據是否相符?」
-   - 並列討論兩種競爭性解釋:
-     A. 市場錯殺/錯漲(預期過度悲觀或樂觀)
-     B. 市場正在定價一個你還沒看到的長期變數(隱藏利空/利多)
-   - 你的任務是評估「哪個解釋更能解釋當前數據異常」,而非直接套模板
-   - 例子:若 PE 6 + 殖利率 7% + 毛利率近 4 季穩定 + 現金部位充足 → 不要說「景氣循環末端」,要問「市場為什麼給這個價? 是錯殺還是看到結構性風險?」
-
-9. **歷史軌跡 = 舉證責任,不是預測公式**:
-   - 歷史軌跡有警示價值,但不是「必然重演」的預測
-   - 當數據出現歷史罕見組合時,先描述「歷史上類似情境通常如何發展」(承認歷史重力)
-   - 然後問:「現在跟歷史最大的差別是什麼? 是否有足夠新變數能克服歷史均值回歸引力?」
-   - 對「典範轉移」(AI 浪潮、地緣政治重構、商業模式變革等)保持開放
-   - 但要求嚴格舉證:新變數要具體可驗證,不能只是「這次不一樣」的感覺
+8. **景氣循環股特別警覺**:基期效應、PE 反指標、循環位置
+9. **科技成長股特別警覺**:估值已透支多少未來、競爭格局
 {"10. **持股者視角**:見下方持股區塊指引" if holding_context else ""}
 
 # 個股
@@ -362,19 +345,7 @@ def build_observation_prompt(
     "stance": "從七選一: strongly_bullish / moderately_bullish / neutral_lean_bullish / neutral / neutral_lean_bearish / moderately_bearish / strongly_bearish",
     "confidence": "1-10 整數",
     "core_reasoning": "為什麼這個立場?2-3 句質化但簡潔",
-    "what_would_change_my_mind": ["訊號 1", "訊號 2", "訊號 3"],
-    "breaking_conditions": [
-      {{
-        "condition": "在什麼總經/產業/公司層級的變數下,目前的判斷會失效(具體可驗證,不要寫『若情況惡化』這種廢話)",
-        "monitor_signal": "對應該追蹤的具體訊號(例如:單季毛利率跌破 X%、CSP 法說 capex 指引下修等)",
-        "severity": "若條件成真的影響強度: 致命 / 重大 / 中度"
-      }},
-      {{
-        "condition": "另一個破局條件",
-        "monitor_signal": "...",
-        "severity": "..."
-      }}
-    ]
+    "what_would_change_my_mind": ["訊號 1", "訊號 2", "訊號 3"]
   }},
   
   "current_situation": [
@@ -411,7 +382,7 @@ def build_observation_prompt(
   ],
   
 {holder_json}
-  "qualitative_summary": "綜合判斷(2-3 段,真正的質化分析,必須展現以下對撞思考:(1)目前市場定價反映什麼共識? (2)你的觀察跟市場共識有何不同? (3)為什麼你被某邊說服或仍保留懷疑? 不要堆砌數據,要展現分析師的判斷力{qualitative_desc})",
+  "qualitative_summary": "綜合判斷(2-3 段,真正的質化分析。展現分析師思考深度{qualitative_desc})",
   
   "ai_self_disclosed_limits": [
     "我這次分析的限制 1", "限制 2"
@@ -427,46 +398,12 @@ def build_observation_prompt(
 1. 整體立場必填(不能空白逃避)
 2. 三情境機率加總 = 100%
 3. what_would_change_my_mind 至少 3 條
-4. **breaking_conditions 至少 2 條**:具體可驗證的破局條件 + 對應追蹤訊號
-5. current_situation 4-6 個列點
-6. signals_to_monitor 至少 5 個,含 2 個 🔴
-7. qualitative_summary 是質化分析容器,需展現「市場共識 vs 你的觀察」的對撞思考
-8. 不寫「建議買進/賣出」
-9. 不要編造數字
-10. 不寫多空辯論結構
-11. **不要套用通案模板**:看到極端值時並列討論「錯殺 vs 隱藏利空」兩種可能
-12. **歷史軌跡用於舉證,不用於下結論**:有歷史相似情境時要說明,但允許「新變數可克服歷史引力」的可能
-13. **事件與數據的整合詮釋(通用,所有個股適用)**:
-    當 upcoming_events 包含結構性事件(擴廠期/CB 發行/閉鎖期/業務轉型/購併/法說 guidance 重大調整/重大訴訟/監管變化等),量化數據(營收/EPS/毛利)的詮釋必須結合事件 context,禁止直接套衰退或泡沫模板。
-    
-    處理框架(三步):
-    
-    Step 1 - 識別事件類型,推論「典型財務 pattern」:
-      - 「擴廠期/Capex 高峰期」 → 折舊增加、營收暫時持平或下滑、毛利可能下降
-      - 「CB 發行/閉鎖期」 → 籌碼異動、稀釋預期、特定人鎖碼可能控盤
-      - 「業務轉型期」 → 舊業務萎縮、新業務未放量、營收 YoY 暫時難看
-      - 「景氣循環下行段」 → 營收 YoY 衰退、毛利收縮、配息可能下修
-      - 「景氣循環上行段」 → 營收 YoY 暴增但基期低、需警覺循環頂點
-      - 「法說 guidance 重大調整」 → 預期校準,需重評
-      - 「重大訴訟/監管」 → 區分「一次性影響」vs「結構性影響」
-    
-    Step 2 - 對照當前量化數據是「符合 pattern」還是「異常」:
-      - 符合 pattern(例:擴廠期月營收下降是合理):
-        → 不能套衰退模板
-        → 該追蹤的是「pattern 演進進度」(投產時間? 新業務 ramp up 速度? 同業比較?)
-      - 偏離 pattern(例:擴廠期但同業沒下滑、或下滑幅度遠超同業):
-        → 才是真警訊,須警告使用者
-    
-    Step 3 - 給出「pattern-aware」的判讀:
-      - 明確說明「我認知這是 X 期,典型 pattern 是 Y」
-      - 分析「當前是否符合 Y 或偏離 Y」
-      - 偏離才是異常,符合就是「進度中」
-    
-    禁止行為:
-    - 看到月營收 -50% 直接套衰退模板,忽略 upcoming_events 提到的擴廠/轉型 context
-    - 看到 CB 發行直接套「公司缺錢」的負面詮釋,忽略「籌資擴張」可能
-    - 看到擴廠直接套「產能過剩風險」,忽略「配合需求成長」可能
-    - 看到 PE 異常低就套「景氣循環頂部」,忽略可能的結構性轉變
+4. current_situation 4-6 個列點
+5. signals_to_monitor 至少 5 個,含 2 個 🔴
+6. qualitative_summary 是質化分析容器
+7. 不寫「建議買進/賣出」
+8. 不要編造數字
+9. 不寫多空辯論結構
 {holder_rule}
 """
     return prompt
@@ -647,13 +584,14 @@ def run_thesis_comparison(ai_observation: dict, user_thesis: dict, model_name: s
 # ============================================================
 # DB 存取
 # ============================================================
-def save_observation(symbol: str, primary_horizon: str, result: dict, thesis_snapshot: Optional[dict] = None) -> Optional[str]:
+def save_observation(symbol: str, primary_horizon: str, result: dict, thesis_snapshot: Optional[dict] = None, user_id: str = None) -> Optional[str]:
     if not result.get("success"):
         return None
     sb = _get_supabase()
     data = result["data"]
     record = {
         "symbol": symbol,
+        "user_id": user_id,
         "thesis_snapshot": (thesis_snapshot or {}).get("thesis"),
         "moat_snapshot": (thesis_snapshot or {}).get("moat"),
         "risks_snapshot": (thesis_snapshot or {}).get("risks"),
@@ -673,7 +611,10 @@ def save_observation(symbol: str, primary_horizon: str, result: dict, thesis_sna
     return None
 
 
-def load_observations(symbol: str, limit: int = 5):
+def load_observations(symbol: str, limit: int = 5, user_id: str = None):
     sb = _get_supabase()
-    res = sb.table("thesis_reviews").select("*").eq("symbol", symbol).order("created_at", desc=True).limit(limit).execute()
+    query = sb.table("thesis_reviews").select("*").eq("symbol", symbol)
+    if user_id:
+        query = query.eq("user_id", user_id)
+    res = query.order("created_at", desc=True).limit(limit).execute()
     return res.data or []

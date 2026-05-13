@@ -1,6 +1,7 @@
-streamlit
-pandas
-google-generativeai
-supabase
+streamlit>=1.30
+supabase>=2.0
 python-dotenv
+pandas
 plotly
+google-generativeai
+FinMind

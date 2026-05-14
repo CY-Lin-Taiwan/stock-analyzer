@@ -2488,19 +2488,39 @@ def page_transactions():
                         try:
                             sym_to_remove = stock_to_remove_options[to_remove_label]
                             uid = get_user_id()
+                            
+                            # === DEBUG: 把實際變數值顯示出來 ===
+                            st.info(f"🔍 DEBUG: 要刪除 symbol='{sym_to_remove}', user_id='{uid}'")
+                            
                             # 只刪當前 user 的個人資料,市場資料(daily_prices 等)是共用,不刪
-                            supabase.table("transactions").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
-                            supabase.table("theses").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
-                            supabase.table("thesis_reviews").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
-                            supabase.table("stocks").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            r1 = supabase.table("transactions").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            r2 = supabase.table("theses").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            r3 = supabase.table("thesis_reviews").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            r4 = supabase.table("stocks").delete().eq("symbol", sym_to_remove).eq("user_id", uid).execute()
+                            
+                            # === DEBUG: 看每個 delete 刪了幾筆 ===
+                            st.info(f"🔍 DEBUG 刪除結果:")
+                            st.code(f"""
+transactions 刪除: {len(r1.data) if r1.data else 0} 筆 - {r1.data}
+theses 刪除:       {len(r2.data) if r2.data else 0} 筆 - {r2.data}
+thesis_reviews 刪除: {len(r3.data) if r3.data else 0} 筆 - {r3.data}
+stocks 刪除:       {len(r4.data) if r4.data else 0} 筆 - {r4.data}
+                            """)
                             
                             st.session_state[confirm_key] = False
                             st.cache_data.clear()
-                            st.success(f"✅ 已從你的追蹤清單移除 {to_remove_label} (市場資料保留供共用)")
-                            st.rerun()
+                            
+                            if r4.data and len(r4.data) > 0:
+                                st.success(f"✅ 已從你的追蹤清單移除 {to_remove_label}")
+                                # 不要 rerun,讓 user 先看 debug 資訊
+                                # st.rerun()
+                            else:
+                                st.error(f"❌ stocks 表沒刪到任何資料!請看上面 DEBUG 訊息")
+                                
                         except Exception as e:
                             st.error(f"❌ 移除失敗: {e}")
                             st.session_state[confirm_key] = False
+                            st.exception(e)
 
 
 # ============================================================

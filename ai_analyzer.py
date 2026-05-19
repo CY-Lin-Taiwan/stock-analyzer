@@ -174,6 +174,7 @@ def build_observation_prompt(
     data_freshness: str = None,
     holding_context: Optional[dict] = None,
     upcoming_events: str = None,
+    news_list: Optional[list] = None,
 ) -> str:
     """組裝 AI 獨立觀察 prompt"""
     primary_label = HORIZON_LABELS.get(primary_horizon, "中期 (6-12 個月)")
@@ -270,7 +271,18 @@ def build_observation_prompt(
     # === 處理前瞻事件 ===
     event_text = ""
     if upcoming_events and upcoming_events.strip():
-        event_text = f"\n## 近期重大事件 / 前瞻資訊 (極重要：這是尚未反映在上方客觀數據的最新事實)\n- {upcoming_events}\n"
+        event_text = f"\n## 近期重大事件 / 前瞻資訊 (使用者主動輸入,極重要)\n- {upcoming_events}\n"
+    
+    # === 處理自動抓取的新聞 ===
+    news_text = ""
+    if news_list:
+        news_lines = ["", "## 近期主流媒體報導 (系統自動抓取,僅供參考)", ""]
+        for i, n in enumerate(news_list, 1):
+            source = n.get('source', '未知')
+            age = n.get('age', '')
+            title = n.get('title', '')
+            news_lines.append(f"{i}. [{source} · {age}] {title}")
+        news_text = "\n".join(news_lines) + "\n"
     
     freshness_note = f"(資料最新更新至 {data_freshness})" if data_freshness else ""
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -307,6 +319,11 @@ def build_observation_prompt(
 8. **景氣循環股特別警覺**:基期效應、PE 反指標、循環位置
 9. **科技成長股特別警覺**:估值已透支多少未來、競爭格局
 {"10. **持股者視角**:見下方持股區塊指引" if holding_context else ""}
+11. **新聞使用守則**:若下方有「近期主流媒體報導」區塊,你必須:
+    a. 區分「實質事件」vs「股價評論/猜測」── 只把實質事件納入分析(法說會、新訂單、政策、營收公告等)
+    b. 不被單一新聞的情緒/立場主導(媒體有立場,你要客觀)
+    c. 對撞:若新聞跟客觀數據矛盾,以數據為準,但要說明「為何媒體這樣解讀」
+12. **引用透明**:若你的分析有用到新聞資訊,必須在 `news_references` 欄位明確列出「引用第 N 則新聞 + 怎麼用它」
 
 # 個股
 - {symbol} {name} ({industry})
@@ -329,6 +346,7 @@ def build_observation_prompt(
 {chips_text}
 {holding_block}
 {event_text}
+{news_text}
 
 # 主力時間框架
 
@@ -390,6 +408,10 @@ def build_observation_prompt(
   
   "data_references": [
     "本次引用的關鍵數據點 1", "數據點 2"
+  ],
+  
+  "news_references": [
+    "(若有引用新聞) 引用第 N 則 [來源] 標題: 怎麼用它,例如：佐證/補充/反證了 X"
   ]
 }}
 
@@ -404,6 +426,7 @@ def build_observation_prompt(
 7. 不寫「建議買進/賣出」
 8. 不要編造數字
 9. 不寫多空辯論結構
+10. news_references 如果這次分析沒用到新聞,給空陣列 []。若用了,必須明確說「怎麼用」
 {holder_rule}
 """
     return prompt
@@ -421,6 +444,7 @@ def run_observation(
     data_freshness: str = None,
     holding_context: Optional[dict] = None,
     upcoming_events: str = None,
+    news_list: Optional[list] = None,
     model_name: str = None,
 ) -> dict:
     """執行 AI 獨立觀察"""
@@ -430,7 +454,7 @@ def run_observation(
     prompt = build_observation_prompt(
         symbol, name, industry, primary_horizon,
         valuation, monthly_rev, quarterly_fin, chips, data_freshness,
-        holding_context, upcoming_events
+        holding_context, upcoming_events, news_list
     )
     
     try:

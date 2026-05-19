@@ -5,3 +5,4 @@ pandas
 plotly
 google-generativeai
 FinMind
+feedparser

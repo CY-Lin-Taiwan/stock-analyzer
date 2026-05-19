@@ -6,10 +6,12 @@ Phase 2: 持股總覽 + 個股技術分析(K線/PE/月營收/季報) + 投資論
 # 1. 載入套件與環境變數
 # ==========================================
 import os
+import time
 from datetime import datetime
 import subprocess
 import sys
 import ai_analyzer
+import news_fetcher  # Phase 4.5: AI 觀察自動納入新聞
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -1427,6 +1429,27 @@ def page_stock_detail():
                     current_price=val_data.get("close", 0),
                 )
 
+                # === Phase 4.5: 抓取最近新聞作為市場 context ===
+                # 用每小時 bucket 當 cache key (1 小時內不重抓)
+                hourly_bucket = int(time.time() // 3600)
+                
+                @st.cache_data(ttl=3600, show_spinner=False)
+                def _fetch_news_for_obs(sym, name, bucket):
+                    return news_fetcher.fetch_news(sym, name, days=7, limit=10)
+                
+                stock_name_for_news = stock_info.get("name", selected_symbol)
+                try:
+                    news_list = _fetch_news_for_obs(selected_symbol, stock_name_for_news, hourly_bucket)
+                except Exception as e:
+                    print(f"[app] 新聞抓取失敗: {e}")
+                    news_list = []
+                
+                # 顯示抓到幾則新聞
+                if news_list:
+                    st.caption(f"📰 自動抓取 {len(news_list)} 則主流媒體新聞作為 AI 分析參考")
+                else:
+                    st.caption("📰 (本次沒抓到主流媒體新聞,AI 將基於數據與你輸入的事件分析)")
+
                 # 執行
                 result = ai_analyzer.run_observation(
                     symbol=selected_symbol,
@@ -1444,7 +1467,8 @@ def page_stock_detail():
                     chips=chips_summary,
                     data_freshness=data_freshness,
                     holding_context=holding_ctx,
-                    upcoming_events=upcoming_events
+                    upcoming_events=upcoming_events,
+                    news_list=news_list,
                 )
                 
                 if result["success"]:
@@ -1742,6 +1766,16 @@ def render_stress_test_result(data: dict, tokens: dict = None, model: str = None
     if refs:
         with st.expander("📊 本次引用的資料(可回去驗證)"):
             for r in refs:
+                st.markdown(f"- {r}")
+    
+    # ===========================================================
+    # 新聞引用 (Phase 4.5)
+    # ===========================================================
+    news_refs = data.get("news_references", [])
+    if news_refs:
+        with st.expander(f"📰 本次引用的新聞 ({len(news_refs)} 則)"):
+            st.caption("AI 在分析中引用了下列新聞,你可以審視 AI 的詮釋是否合理")
+            for r in news_refs:
                 st.markdown(f"- {r}")
 
 

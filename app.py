@@ -1449,6 +1449,14 @@ def page_stock_detail():
                     st.caption(f"📰 自動抓取 {len(news_list)} 則主流媒體新聞作為 AI 分析參考")
                 else:
                     st.caption("📰 (本次沒抓到主流媒體新聞,AI 將基於數據與你輸入的事件分析)")
+                if holding_ctx:
+                    st.caption(
+                    f"🎯 AI 將從持股者視角分析:基於你 {holding_ctx['shares']:,} 股、"
+                    f"均價 {holding_ctx['avg_cost']}、累積已領股息 "
+                    f"{holding_ctx['dividends_received_per_share']} 元/股"
+                )    
+                else:
+                    st.caption("🎯 AI 將從『尚未持有』的觀察者視角分析")
 
                 # 執行
                 result = ai_analyzer.run_observation(

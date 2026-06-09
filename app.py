@@ -12,6 +12,7 @@ import subprocess
 import sys
 import ai_analyzer
 import news_fetcher  # Phase 4.5: AI 觀察自動納入新聞
+import metrics  # 進階指標(夏普 + 布林)
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -293,6 +294,36 @@ def load_prices(symbol):
         .order("date", desc=False).execute().data
 
 
+@st.cache_data(ttl=300)
+def load_dividends_map(symbol):
+    """
+    讀該股除息紀錄,回傳 {ex_date(str 'YYYY-MM-DD'): {"cash":float, "stock":float}}。
+    給夏普值「含息還原」用:除息日股價跳空不該被當成下跌。
+    """
+    try:
+        rows = supabase.table("dividends") \
+            .select("ex_date,cash_dividend,stock_dividend") \
+            .eq("symbol", symbol).execute().data
+    except Exception as e:
+        print(f"[app] 讀取股利失敗: {e}")
+        return {}
+
+    out = {}
+    for r in rows or []:
+        ex = r.get("ex_date")
+        if not ex:
+            continue
+        key = str(ex)[:10]
+        cash = float(r.get("cash_dividend") or 0)
+        stock = float(r.get("stock_dividend") or 0)
+        if key in out:  # 同一除息日多筆(如普通+特別股利)就累加
+            out[key]["cash"] += cash
+            out[key]["stock"] += stock
+        else:
+            out[key] = {"cash": cash, "stock": stock}
+    return out
+
+
 def calc_holdings():
     user_id = get_user_id()
     txns = load_transactions(user_id)
@@ -506,6 +537,8 @@ def page_portfolio_overview():
         f"NT$ {total_expected_dividend/10000:,.2f} 萬", # 🌟 改成 .2f 顯示精確位數
         f"成本殖利率: {portfolio_cost_yield:.2f}%"
     )
+    
+    # (組合夏普值已移除:組合淨值序列資料不足、語意牽強,改在個股頁看個股夏普值)
 
     st.divider()
     
@@ -692,6 +725,120 @@ def page_stock_detail():
                 "Yield (殖利率)", 
                 f"{current_yield:.2f}%" if pd.notna(current_yield) else "N/A"
             )
+        
+        # === 進階指標: 夏普值 + 布林通道 ===
+        # 用該股 1 年日線計算
+        try:
+            price_records = load_prices(selected_symbol)
+            if price_records and len(price_records) >= 30:
+                df_for_metrics = pd.DataFrame(price_records)
+                df_for_metrics["date"] = pd.to_datetime(df_for_metrics["date"])
+                df_for_metrics = df_for_metrics.sort_values("date").reset_index(drop=True)
+                # 以日期為 index 的收盤價序列(夏普值要用,以便對齊除息日還原股利)
+                price_series = df_for_metrics.set_index("date")["close"]
+                last_year_prices = price_series.tail(252)
+                # 撈除息紀錄,把股利加回除息日報酬(還原),避免高配息股(如長榮)被當成下跌
+                div_map = load_dividends_map(selected_symbol)
+                sharpe_val = metrics.calculate_sharpe(last_year_prices, dividends=div_map)
+                # 布林通道用全部資料(會自動取最近 20 日)
+                bb = metrics.calculate_bollinger_bands(df_for_metrics["close"])
+            else:
+                sharpe_val = None
+                bb = None
+        except Exception as e:
+            print(f"[app] 進階指標計算失敗: {e}")
+            sharpe_val = None
+            bb = None
+        
+        st.markdown("### 📐 進階指標")
+        
+        # === 夏普值 ===
+        st.markdown("##### 個股夏普值 (1 年)")
+        sharpe_grade = metrics.get_sharpe_grade(sharpe_val)
+        
+        scol1, scol2 = st.columns([1, 3])
+        with scol1:
+            sharpe_display = f"{sharpe_val}" if sharpe_val is not None else "N/A"
+            st.metric(
+                "夏普值",
+                sharpe_display,
+                help=(
+                    "📖 **夏普值 = (年化報酬 − 無風險利率) ÷ 年化波動度**\n\n"
+                    "衡量「每承擔一單位風險換到多少超額報酬」。\n\n"
+                    "**參數:** 過去 252 個交易日, 無風險利率 1.5%, 年化計算\n\n"
+                    "_報酬已用現金/股票股利還原,除息跳空不會被當成下跌_\n\n"
+                    "_註:算的是『該股這一年股價的風險調整後報酬』,與你的進場成本/持股損益無關_"
+                ),
+                label_visibility="collapsed"
+            )
+        with scol2:
+            # 視覺化分級
+            tier = sharpe_grade["tier"]
+            if tier >= 0:
+                bars = ["⬜", "⬜", "⬜", "⬜"]
+                if tier == 0:
+                    bars[0] = "🟥"
+                elif tier == 1:
+                    bars[1] = "🟧"
+                elif tier == 2:
+                    bars[2] = "🟩"
+                elif tier == 3:
+                    bars[3] = "🟦"
+                
+                st.markdown(
+                    f"**{bars[0]} 負值區** | **{bars[1]} 裸奔狀態** | "
+                    f"**{bars[2]} 標準裝甲** | **{bars[3]} 降維打擊**"
+                )
+                st.markdown(f"**{sharpe_grade['position_text']}**")
+                st.caption(f"💬 {sharpe_grade['description']}")
+            else:
+                st.caption(sharpe_grade['description'])
+        
+        # === 布林通道位階 ===
+        st.markdown("##### 布林通道位階")
+        bb_grade = metrics.get_bollinger_grade(bb)
+        
+        bcol1, bcol2 = st.columns([1, 3])
+        with bcol1:
+            if bb and bb.get("percent_b") is not None:
+                pb_display = f"{bb['percent_b']:.0f}%"
+            else:
+                pb_display = "N/A"
+            
+            st.metric(
+                "%B 位階",
+                pb_display,
+                help=(
+                    "📖 **布林通道 = 20 日均線 ± 2 倍標準差**\n\n"
+                    "**%B 位階:** 現價在通道內的相對位置\n"
+                    "- 0% = 跌到下軌 / 100% = 漲到上軌\n"
+                    "- 50% = 在中軌(均線)\n\n"
+                    "**參數:** 20 日, 2 標準差"
+                ),
+                label_visibility="collapsed"
+            )
+        with bcol2:
+            tier = bb_grade["tier"]
+            if tier >= 0:
+                # 6 個區間的視覺化
+                bars = ["⬜"] * 6
+                labels = ["跌破\n下軌", "靠近\n下軌", "中軌\n之下", "中軌\n之上", "靠近\n上軌", "突破\n上軌"]
+                colors = ["🟥", "🟧", "🟨", "🟩", "🟧", "🟥"]
+                bars[tier] = colors[tier]
+                
+                bar_line = " | ".join([f"{bars[i]} {labels[i].replace(chr(10), '')}" for i in range(6)])
+                st.markdown(bar_line)
+                st.markdown(f"**{bb_grade['position_text']}**")
+                if bb:
+                    st.caption(
+                        f"📊 現價 {bb.get('current')} / 上軌 {bb.get('upper')} / "
+                        f"中軌 {bb.get('middle')} / 下軌 {bb.get('lower')}"
+                    )
+                st.caption(f"💬 {bb_grade['description']}")
+                st.caption(f"📈 **市場含義:** {bb_grade['trading_implication']}")
+            else:
+                st.caption(bb_grade['description'])
+        
         st.divider()
 
     else:
@@ -1449,14 +1596,21 @@ def page_stock_detail():
                     st.caption(f"📰 自動抓取 {len(news_list)} 則主流媒體新聞作為 AI 分析參考")
                 else:
                     st.caption("📰 (本次沒抓到主流媒體新聞,AI 將基於數據與你輸入的事件分析)")
-                if holding_ctx:
-                    st.caption(
-                    f"🎯 AI 將從持股者視角分析:基於你 {holding_ctx['shares']:,} 股、"
-                    f"均價 {holding_ctx['avg_cost']}、累積已領股息 "
-                    f"{holding_ctx['dividends_received_per_share']} 元/股"
-                )    
-                else:
-                    st.caption("🎯 AI 將從『尚未持有』的觀察者視角分析")
+
+                # === 計算技術指標(夏普值 + 布林通道)給 AI ===
+                metrics_for_ai = {}
+                try:
+                    price_records_for_ai = load_prices(selected_symbol)
+                    if price_records_for_ai and len(price_records_for_ai) >= 30:
+                        df_m = pd.DataFrame(price_records_for_ai)
+                        df_m["date"] = pd.to_datetime(df_m["date"])
+                        df_m = df_m.sort_values("date").reset_index(drop=True)
+                        last_year = df_m.set_index("date")["close"].tail(252)
+                        div_map_ai = load_dividends_map(selected_symbol)
+                        metrics_for_ai["sharpe"] = metrics.calculate_sharpe(last_year, dividends=div_map_ai)
+                        metrics_for_ai["bollinger"] = metrics.calculate_bollinger_bands(df_m["close"])
+                except Exception as e:
+                    print(f"[app] 給 AI 的 metrics 計算失敗: {e}")
 
                 # 執行
                 result = ai_analyzer.run_observation(
@@ -1477,6 +1631,7 @@ def page_stock_detail():
                     holding_context=holding_ctx,
                     upcoming_events=upcoming_events,
                     news_list=news_list,
+                    metrics=metrics_for_ai,
                 )
                 
                 if result["success"]:

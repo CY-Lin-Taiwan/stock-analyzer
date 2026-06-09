@@ -175,6 +175,7 @@ def build_observation_prompt(
     holding_context: Optional[dict] = None,
     upcoming_events: str = None,
     news_list: Optional[list] = None,
+    metrics: Optional[dict] = None,
 ) -> str:
     """組裝 AI 獨立觀察 prompt"""
     primary_label = HORIZON_LABELS.get(primary_horizon, "中期 (6-12 個月)")
@@ -284,6 +285,32 @@ def build_observation_prompt(
             news_lines.append(f"{i}. [{source} · {age}] {title}")
         news_text = "\n".join(news_lines) + "\n"
     
+    # === 處理技術指標 (夏普值 + 布林通道) ===
+    metrics_text = "(無資料)"
+    if metrics:
+        sharpe = metrics.get("sharpe")
+        bb = metrics.get("bollinger")
+        
+        lines = []
+        if sharpe is not None:
+            lines.append(f"- 個股夏普值 (1 年, RF=1.5%): {sharpe}")
+        else:
+            lines.append("- 個股夏普值: 資料不足")
+        
+        if bb:
+            lines.append(
+                f"- 布林通道: 現價 {bb.get('current')} / "
+                f"上軌 {bb.get('upper')} / 中軌 {bb.get('middle')} / 下軌 {bb.get('lower')}"
+            )
+            pb = bb.get('percent_b')
+            if pb is not None:
+                lines.append(f"- 布林位階 %B = {pb}% (0%=下軌, 50%=中軌, 100%=上軌)")
+            lines.append(f"- 位階描述: {bb.get('position')}")
+        else:
+            lines.append("- 布林通道: 資料不足")
+        
+        metrics_text = "\n".join(lines)
+    
     freshness_note = f"(資料最新更新至 {data_freshness})" if data_freshness else ""
     today_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -335,6 +362,9 @@ def build_observation_prompt(
 - PE: {valuation.get('pe', 'N/A')}
 - PB: {valuation.get('pb', 'N/A')}
 - 殖利率: {valuation.get('dividend_yield', 'N/A')}%
+
+## 技術指標 (近期)
+{metrics_text}
 
 ## 近 6 個月營收
 {rev_text}
@@ -445,6 +475,7 @@ def run_observation(
     holding_context: Optional[dict] = None,
     upcoming_events: str = None,
     news_list: Optional[list] = None,
+    metrics: Optional[dict] = None,
     model_name: str = None,
 ) -> dict:
     """執行 AI 獨立觀察"""
@@ -454,7 +485,7 @@ def run_observation(
     prompt = build_observation_prompt(
         symbol, name, industry, primary_horizon,
         valuation, monthly_rev, quarterly_fin, chips, data_freshness,
-        holding_context, upcoming_events, news_list
+        holding_context, upcoming_events, news_list, metrics
     )
     
     try:

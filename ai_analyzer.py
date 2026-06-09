@@ -285,31 +285,25 @@ def build_observation_prompt(
             news_lines.append(f"{i}. [{source} · {age}] {title}")
         news_text = "\n".join(news_lines) + "\n"
     
-    # === 處理技術指標 (夏普值 + 布林通道) ===
+    # === 處理技術指標 (布林通道,給「近期觀察」用) ===
+    # 注意: 不傳夏普值給 AI,因為夏普是 252 日歷史指標,跟近期觀察時間尺度不符
     metrics_text = "(無資料)"
     if metrics:
-        sharpe = metrics.get("sharpe")
         bb = metrics.get("bollinger")
         
         lines = []
-        if sharpe is not None:
-            lines.append(f"- 個股夏普值 (1 年, RF=1.5%): {sharpe}")
-        else:
-            lines.append("- 個股夏普值: 資料不足")
-        
         if bb:
             lines.append(
-                f"- 布林通道: 現價 {bb.get('current')} / "
+                f"- 布林通道(20 日): 現價 {bb.get('current')} / "
                 f"上軌 {bb.get('upper')} / 中軌 {bb.get('middle')} / 下軌 {bb.get('lower')}"
             )
             pb = bb.get('percent_b')
             if pb is not None:
                 lines.append(f"- 布林位階 %B = {pb}% (0%=下軌, 50%=中軌, 100%=上軌)")
-            lines.append(f"- 位階描述: {bb.get('position')}")
-        else:
-            lines.append("- 布林通道: 資料不足")
+            lines.append(f"- 近期位階描述: {bb.get('position')}")
         
-        metrics_text = "\n".join(lines)
+        if lines:
+            metrics_text = "\n".join(lines)
     
     freshness_note = f"(資料最新更新至 {data_freshness})" if data_freshness else ""
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -363,7 +357,7 @@ def build_observation_prompt(
 - PB: {valuation.get('pb', 'N/A')}
 - 殖利率: {valuation.get('dividend_yield', 'N/A')}%
 
-## 技術指標 (近期)
+## 近期技術位階 (布林通道 20 日)
 {metrics_text}
 
 ## 近 6 個月營收

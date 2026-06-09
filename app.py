@@ -294,36 +294,6 @@ def load_prices(symbol):
         .order("date", desc=False).execute().data
 
 
-@st.cache_data(ttl=300)
-def load_dividends_map(symbol):
-    """
-    讀該股除息紀錄,回傳 {ex_date(str 'YYYY-MM-DD'): {"cash":float, "stock":float}}。
-    給夏普值「含息還原」用:除息日股價跳空不該被當成下跌。
-    """
-    try:
-        rows = supabase.table("dividends") \
-            .select("ex_date,cash_dividend,stock_dividend") \
-            .eq("symbol", symbol).execute().data
-    except Exception as e:
-        print(f"[app] 讀取股利失敗: {e}")
-        return {}
-
-    out = {}
-    for r in rows or []:
-        ex = r.get("ex_date")
-        if not ex:
-            continue
-        key = str(ex)[:10]
-        cash = float(r.get("cash_dividend") or 0)
-        stock = float(r.get("stock_dividend") or 0)
-        if key in out:  # 同一除息日多筆(如普通+特別股利)就累加
-            out[key]["cash"] += cash
-            out[key]["stock"] += stock
-        else:
-            out[key] = {"cash": cash, "stock": stock}
-    return out
-
-
 def calc_holdings():
     user_id = get_user_id()
     txns = load_transactions(user_id)
@@ -538,7 +508,61 @@ def page_portfolio_overview():
         f"成本殖利率: {portfolio_cost_yield:.2f}%"
     )
     
-    # (組合夏普值已移除:組合淨值序列資料不足、語意牽強,改在個股頁看個股夏普值)
+    # === 組合夏普值 (Phase 4.6) ===
+    try:
+        # 用「市值比重」當權重
+        weights_dict = {}
+        prices_dict = {}
+        for _, row in holdings.iterrows():
+            sym = row["symbol"]
+            market_val = row["market_value"]
+            if market_val > 0:
+                weights_dict[sym] = float(market_val)
+                # 取該股最近 1 年日線
+                price_recs = load_prices(sym)
+                if price_recs and len(price_recs) >= 30:
+                    df_p = pd.DataFrame(price_recs)
+                    df_p["date"] = pd.to_datetime(df_p["date"])
+                    df_p = df_p.sort_values("date").reset_index(drop=True)
+                    prices_dict[sym] = df_p["close"].tail(252)
+        
+        portfolio_sharpe = metrics.calculate_portfolio_sharpe(prices_dict, weights_dict)
+    except Exception as e:
+        print(f"[app] 組合夏普值計算失敗: {e}")
+        portfolio_sharpe = None
+    
+    pcol1, pcol2 = st.columns([1, 3])
+    with pcol1:
+        sharpe_display = f"{portfolio_sharpe}" if portfolio_sharpe is not None else "資料不足"
+        st.metric(
+            "📐 組合夏普值 (1 年)",
+            sharpe_display,
+            help=(
+                "📖 **組合夏普值衡量整個投資組合的「風險調整後報酬」**\n\n"
+                "以「市值比重」加權各持股的日報酬,計算組合波動性與超額報酬之比。\n\n"
+                "**參數:** 252 個交易日, 無風險利率 1.5%, 市值加權"
+            )
+        )
+    with pcol2:
+        p_grade = metrics.get_sharpe_grade(portfolio_sharpe)
+        tier = p_grade["tier"]
+        if tier >= 0:
+            bars = ["⬜", "⬜", "⬜", "⬜"]
+            colors = ["🟥", "🟧", "🟩", "🟦"]
+            bars[tier] = colors[tier]
+            
+            st.markdown(
+                f"**{bars[0]} 負值區** | **{bars[1]} 裸奔狀態** | "
+                f"**{bars[2]} 標準裝甲** | **{bars[3]} 降維打擊**"
+            )
+            st.markdown(f"**{p_grade['position_text']}**")
+            st.caption(f"💬 {p_grade['description']}")
+            st.caption(
+                "_組合 vs 個股:_ 組合考慮股票間相關性,通常會 < 各股加權平均"
+                "(因為分散會降低波動,提升夏普)"
+            )
+        else:
+            st.caption(p_grade['description'])
 
     st.divider()
     
@@ -734,12 +758,9 @@ def page_stock_detail():
                 df_for_metrics = pd.DataFrame(price_records)
                 df_for_metrics["date"] = pd.to_datetime(df_for_metrics["date"])
                 df_for_metrics = df_for_metrics.sort_values("date").reset_index(drop=True)
-                # 以日期為 index 的收盤價序列(夏普值要用,以便對齊除息日還原股利)
-                price_series = df_for_metrics.set_index("date")["close"]
-                last_year_prices = price_series.tail(252)
-                # 撈除息紀錄,把股利加回除息日報酬(還原),避免高配息股(如長榮)被當成下跌
-                div_map = load_dividends_map(selected_symbol)
-                sharpe_val = metrics.calculate_sharpe(last_year_prices, dividends=div_map)
+                # 取最近 252 個交易日(約 1 年)算夏普
+                last_year_prices = df_for_metrics["close"].tail(252)
+                sharpe_val = metrics.calculate_sharpe(last_year_prices)
                 # 布林通道用全部資料(會自動取最近 20 日)
                 bb = metrics.calculate_bollinger_bands(df_for_metrics["close"])
             else:
@@ -765,9 +786,7 @@ def page_stock_detail():
                 help=(
                     "📖 **夏普值 = (年化報酬 − 無風險利率) ÷ 年化波動度**\n\n"
                     "衡量「每承擔一單位風險換到多少超額報酬」。\n\n"
-                    "**參數:** 過去 252 個交易日, 無風險利率 1.5%, 年化計算\n\n"
-                    "_報酬已用現金/股票股利還原,除息跳空不會被當成下跌_\n\n"
-                    "_註:算的是『該股這一年股價的風險調整後報酬』,與你的進場成本/持股損益無關_"
+                    "**參數:** 過去 252 個交易日, 無風險利率 1.5%, 年化計算"
                 ),
                 label_visibility="collapsed"
             )
@@ -1597,17 +1616,19 @@ def page_stock_detail():
                 else:
                     st.caption("📰 (本次沒抓到主流媒體新聞,AI 將基於數據與你輸入的事件分析)")
 
-                # === 計算技術指標(夏普值 + 布林通道)給 AI ===
+                # === 計算技術指標(只給布林通道,夏普不給 AI)===
+                # 設計原因: 夏普值是 252 日歷史指標(體質),
+                # 布林通道是 20 日近期指標(動態),
+                # 兩者時間尺度不一致,夏普會干擾 AI 的「即時觀察」判斷
+                # 夏普值仍在 UI 顯示給「人」做長期體質參考
                 metrics_for_ai = {}
                 try:
                     price_records_for_ai = load_prices(selected_symbol)
-                    if price_records_for_ai and len(price_records_for_ai) >= 30:
+                    if price_records_for_ai and len(price_records_for_ai) >= 20:
                         df_m = pd.DataFrame(price_records_for_ai)
                         df_m["date"] = pd.to_datetime(df_m["date"])
                         df_m = df_m.sort_values("date").reset_index(drop=True)
-                        last_year = df_m.set_index("date")["close"].tail(252)
-                        div_map_ai = load_dividends_map(selected_symbol)
-                        metrics_for_ai["sharpe"] = metrics.calculate_sharpe(last_year, dividends=div_map_ai)
+                        # 只傳布林通道給 AI(時間尺度跟「近期觀察」一致)
                         metrics_for_ai["bollinger"] = metrics.calculate_bollinger_bands(df_m["close"])
                 except Exception as e:
                     print(f"[app] 給 AI 的 metrics 計算失敗: {e}")

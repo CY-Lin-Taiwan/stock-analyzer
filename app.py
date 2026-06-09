@@ -508,62 +508,6 @@ def page_portfolio_overview():
         f"成本殖利率: {portfolio_cost_yield:.2f}%"
     )
     
-    # === 組合夏普值 (Phase 4.6) ===
-    try:
-        # 用「市值比重」當權重
-        weights_dict = {}
-        prices_dict = {}
-        for _, row in holdings.iterrows():
-            sym = row["symbol"]
-            market_val = row["market_value"]
-            if market_val > 0:
-                weights_dict[sym] = float(market_val)
-                # 取該股最近 1 年日線
-                price_recs = load_prices(sym)
-                if price_recs and len(price_recs) >= 30:
-                    df_p = pd.DataFrame(price_recs)
-                    df_p["date"] = pd.to_datetime(df_p["date"])
-                    df_p = df_p.sort_values("date").reset_index(drop=True)
-                    prices_dict[sym] = df_p["close"].tail(252)
-        
-        portfolio_sharpe = metrics.calculate_portfolio_sharpe(prices_dict, weights_dict)
-    except Exception as e:
-        print(f"[app] 組合夏普值計算失敗: {e}")
-        portfolio_sharpe = None
-    
-    pcol1, pcol2 = st.columns([1, 3])
-    with pcol1:
-        sharpe_display = f"{portfolio_sharpe}" if portfolio_sharpe is not None else "資料不足"
-        st.metric(
-            "📐 組合夏普值 (1 年)",
-            sharpe_display,
-            help=(
-                "📖 **組合夏普值衡量整個投資組合的「風險調整後報酬」**\n\n"
-                "以「市值比重」加權各持股的日報酬,計算組合波動性與超額報酬之比。\n\n"
-                "**參數:** 252 個交易日, 無風險利率 1.5%, 市值加權"
-            )
-        )
-    with pcol2:
-        p_grade = metrics.get_sharpe_grade(portfolio_sharpe)
-        tier = p_grade["tier"]
-        if tier >= 0:
-            bars = ["⬜", "⬜", "⬜", "⬜"]
-            colors = ["🟥", "🟧", "🟩", "🟦"]
-            bars[tier] = colors[tier]
-            
-            st.markdown(
-                f"**{bars[0]} 負值區** | **{bars[1]} 裸奔狀態** | "
-                f"**{bars[2]} 標準裝甲** | **{bars[3]} 降維打擊**"
-            )
-            st.markdown(f"**{p_grade['position_text']}**")
-            st.caption(f"💬 {p_grade['description']}")
-            st.caption(
-                "_組合 vs 個股:_ 組合考慮股票間相關性,通常會 < 各股加權平均"
-                "(因為分散會降低波動,提升夏普)"
-            )
-        else:
-            st.caption(p_grade['description'])
-
     st.divider()
     
    # === 持股明細 ===

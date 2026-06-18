@@ -117,6 +117,60 @@ def get_latest_dividend(symbol: str):
     return 0.0
 
 
+@st.cache_data(ttl=3600)
+def get_all_dividends(symbol: str):
+    """取得該股票所有除息紀錄(用於計算累積已領股息)"""
+    try:
+        res = supabase.table("dividends") \
+            .select("ex_date, cash_dividend, stock_dividend, total_dividend") \
+            .eq("symbol", symbol) \
+            .order("ex_date", desc=False) \
+            .execute()
+        return res.data if res.data else []
+    except Exception:
+        return []
+
+
+def calculate_cumulative_dividend_received(symbol: str, transactions: list) -> dict:
+    """
+    計算「累積已領股息」(從買進日起算,對齊每次除息日的當下持股)
+    這個函式直接呼叫 ai_analyzer 的 calculate_accumulated_dividends,
+    確保 UI 跟 AI 看到的數字一致
+    """
+    # 找該檔的初始建倉日
+    sym_txns = [t for t in transactions if t.get("symbol") == symbol and t.get("action", "buy").lower() == "buy"]
+    if not sym_txns:
+        return {"total_dividend_received": 0.0, "per_share_avg": 0.0, "events": []}
+    
+    initial_date = min(t.get("date", "9999-99-99") for t in sym_txns)
+    
+    # 算當下持股
+    current_shares = 0.0
+    for t in transactions:
+        if t.get("symbol") != symbol:
+            continue
+        action = t.get("action", "buy").lower()
+        shares = float(t.get("shares", 0))
+        if action == "buy":
+            current_shares += shares
+        elif action == "sell":
+            current_shares -= shares
+    
+    if current_shares <= 0:
+        return {"total_dividend_received": 0.0, "per_share_avg": 0.0, "events": []}
+    
+    # 呼叫 ai_analyzer 的精準計算
+    div_info = ai_analyzer.calculate_accumulated_dividends(
+        symbol, initial_date, int(current_shares), transactions=transactions
+    )
+    
+    return {
+        "total_dividend_received": div_info["total_received"],
+        "per_share_avg": div_info["total_per_share"],
+        "events": div_info["events"],
+    }
+
+
 # === 全域 CSS ===
 st.markdown("""
 <style>
@@ -495,18 +549,82 @@ def page_portfolio_overview():
         total_expected_dividend += (latest_div_per_share * shares)
         
     portfolio_cost_yield = (total_expected_dividend / total_cost * 100) if total_cost > 0 else 0
+    
+    # === Phase 4.7: 計算每檔股票的「累積已領股息」===
+    all_txns = load_transactions(get_user_id())
+    holdings["accumulated_dividend"] = holdings["symbol"].apply(
+        lambda sym: calculate_cumulative_dividend_received(sym, all_txns)["total_dividend_received"]
+    )
+    total_accumulated_dividend = holdings["accumulated_dividend"].sum()
+    
+    # === Phase 4.7: 含息成本切換 ===
+    include_div_in_cost = st.toggle(
+        "💰 顯示含息成本 (扣除累積已領股息)",
+        value=False,
+        help=(
+            "📖 **什麼是含息成本?**\n\n"
+            "把「已經領到的股息」當作是「拿回部分本金」,從成本中扣除。\n\n"
+            "**開啟後:**\n"
+            "- 成本變低(扣已領股息)\n"
+            "- 未實現損益變漂亮(因為基準下降)\n"
+            "- 適合存股者觀察「真實風險暴露」\n\n"
+            "**關閉時(預設):**\n"
+            "- 成本不變(買進時的價錢)\n"
+            "- 與券商 APP 口徑一致\n"
+            "- 適合對帳、報稅\n\n"
+            "**累積已領股息:** 從買進日起算,對齊每次除息日當下持股計算"
+        ),
+        key="include_div_in_cost"
+    )
+    
+    if include_div_in_cost:
+        # 含息口徑: 成本扣除累積已領股息
+        holdings["display_cost"] = holdings["total_cost"] - holdings["accumulated_dividend"]
+        holdings["display_avg_cost"] = holdings["display_cost"] / holdings["shares"]
+        holdings["display_pnl"] = holdings["market_value"] - holdings["display_cost"]
+        holdings["display_pnl_pct"] = (holdings["display_pnl"] / holdings["display_cost"]) * 100
+        
+        display_total_cost = total_cost - total_accumulated_dividend
+        display_total_pnl = total_value - display_total_cost
+        display_total_pnl_pct = (display_total_pnl / display_total_cost) * 100 if display_total_cost > 0 else 0
+        
+        cost_label_suffix = " (含息)"
+    else:
+        # 預設口徑: 成本 = 買進事實
+        holdings["display_cost"] = holdings["total_cost"]
+        holdings["display_avg_cost"] = holdings["avg_cost"]
+        holdings["display_pnl"] = holdings["pnl"]
+        holdings["display_pnl_pct"] = holdings["pnl_pct"]
+        
+        display_total_cost = total_cost
+        display_total_pnl = total_pnl
+        display_total_pnl_pct = total_pnl_pct
+        
+        cost_label_suffix = ""
 
     # 🌟 4. 顯示卡片 (採用「萬」單位避開被截斷)
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("💰 總成本", f"NT$ {total_cost/10000:,.1f} 萬")
+    c1.metric(f"💰 總成本{cost_label_suffix}", f"NT$ {display_total_cost/10000:,.1f} 萬")
     c2.metric("📊 總市值", f"NT$ {total_value/10000:,.1f} 萬")
-    c3.metric("📈 未實現損益", f"NT$ {total_pnl/10000:+,.1f} 萬", f"{total_pnl_pct:+.2f}%")
+    c3.metric(
+        f"📈 未實現損益{cost_label_suffix}", 
+        f"NT$ {display_total_pnl/10000:+,.1f} 萬", 
+        f"{display_total_pnl_pct:+.2f}%"
+    )
     c4.metric("📦 持股檔數", f"{len(holdings)} 檔")
     c5.metric(
         "💸 預計年領股息", 
         f"NT$ {total_expected_dividend/10000:,.2f} 萬", # 🌟 改成 .2f 顯示精確位數
         f"成本殖利率: {portfolio_cost_yield:.2f}%"
     )
+    
+    # 累積已領股息資訊條 (永遠顯示,讓使用者知道「實際領了多少」)
+    if total_accumulated_dividend > 0:
+        st.info(
+            f"💵 **累積已領股息: NT$ {total_accumulated_dividend:,.0f} 元** "
+            f"({total_accumulated_dividend/10000:.2f} 萬) "
+            f"｜ 從買進日起算,對齊各次除息日當下持股計算"
+        )
     
     st.divider()
     
@@ -544,11 +662,12 @@ def page_portfolio_overview():
 
     # 2. 先進行重新命名與排序
     display = holdings.sort_values("market_value", ascending=False).copy()
+    # Phase 4.7: 用 display_* 系列(會根據 toggle 切換含/不含息)
     display = display.rename(columns={
         "symbol": "代號", "name": "名稱", "industry": "產業",
-        "shares": "股數", "avg_cost": "均價", "current_price": "現價",
-        "total_cost": "成本", "market_value": "市值",
-        "pnl": "損益", "pnl_pct": "報酬率",
+        "shares": "股數", "display_avg_cost": "均價", "current_price": "現價",
+        "display_cost": "成本", "market_value": "市值",
+        "display_pnl": "損益", "display_pnl_pct": "報酬率",
     })
 
     # 3. 定義格式化函式 (PE 與 PB 共用邏輯)

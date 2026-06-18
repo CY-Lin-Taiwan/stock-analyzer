@@ -52,8 +52,13 @@ def calculate_accumulated_dividends(
     symbol: str,
     initial_position_date: str,
     current_shares: int,
+    transactions: Optional[list] = None,
 ) -> dict:
-    """計算「初始建倉日之後」實際領到的股息"""
+    """計算「初始建倉日之後」實際領到的股息
+    
+    如果有傳 transactions,會用精準版算法(對齊每次除息日的當下持股)
+    若沒傳,fallback 用簡化版(目前持股 × 累積股息元/股)
+    """
     sb = _get_supabase()
     
     res = sb.table("dividends") \
@@ -73,6 +78,65 @@ def calculate_accumulated_dividends(
             "events": [],
         }
     
+    # === 精準版:對齊每次除息日的當下持股 ===
+    if transactions:
+        # 整理該檔交易為時間序列
+        txns_sorted = []
+        for t in transactions:
+            if t.get("symbol") != symbol:
+                continue
+            date_str = t.get("date")
+            action = t.get("action", "buy")
+            shares = float(t.get("shares", 0))
+            if not date_str or shares <= 0:
+                continue
+            txns_sorted.append({
+                "date": date_str,
+                "action": action.lower(),
+                "shares": shares,
+            })
+        txns_sorted.sort(key=lambda x: x["date"])
+        
+        total_received = 0.0
+        events = []
+        
+        for div in divs:
+            ex_date = div.get("ex_date")
+            cash_div = float(div.get("cash_dividend", 0) or 0)
+            if not ex_date or cash_div <= 0:
+                continue
+            
+            # 算除息日當下持股
+            shares_at_ex = 0.0
+            for txn in txns_sorted:
+                if txn["date"] < ex_date:
+                    if txn["action"] == "buy":
+                        shares_at_ex += txn["shares"]
+                    elif txn["action"] == "sell":
+                        shares_at_ex -= txn["shares"]
+            
+            if shares_at_ex <= 0:
+                continue
+            
+            received = shares_at_ex * cash_div
+            total_received += received
+            events.append({
+                "date": ex_date,
+                "cash_dividend": cash_div,
+                "shares_at_that_time": shares_at_ex,
+                "received": received,
+            })
+        
+        total_per_share = (total_received / current_shares) if current_shares > 0 else 0
+        
+        return {
+            "events_count": len(events),
+            "total_per_share": round(total_per_share, 2),
+            "total_received": round(total_received, 0),
+            "events": events,
+        }
+    
+    # === Fallback:簡化版(沒傳 transactions 時用) ===
     total_per_share = sum(d.get("cash_dividend", 0) or 0 for d in divs)
     total_received = total_per_share * current_shares
     
@@ -129,8 +193,8 @@ def build_holding_context(
     else:
         initial_date = min(t["date"] for t in buy)
     
-    # 計算累積已領股息
-    div_info = calculate_accumulated_dividends(symbol, initial_date, current_shares)
+    # 計算累積已領股息(精準版:對齊每次除息日的當下持股)
+    div_info = calculate_accumulated_dividends(symbol, initial_date, current_shares, transactions=txns)
     
     # 算「有效成本」(扣除已領股息)
     effective_cost_per_share = avg_cost - div_info["total_per_share"]

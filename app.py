@@ -2347,7 +2347,7 @@ def page_transactions():
     st.title("⚙️ 交易管理")
     st.caption("管理你的交易紀錄跟追蹤清單")
     
-    tab1, tab2, tab3 = st.tabs(["📝 新增交易", "📋 交易紀錄", "📈 追蹤清單管理"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📝 新增交易", "📋 交易紀錄", "💰 股利管理", "📈 追蹤清單管理"])
     
     # ============================================
     # Tab 1: 新增交易
@@ -2596,16 +2596,10 @@ def page_transactions():
         edit_id = txn_options[edit_label]
         edit_row = df_view[df_view["id"] == edit_id].iloc[0]
         edit_sym = edit_row["symbol"] # 取得該筆交易的股票代號
-
-        # 🌟 額外步驟：去 stocks 表撈取目前的手動股息設定
-        try:
-            stock_res = supabase.table("stocks").select("manual_dividend").eq("symbol", edit_sym).eq("user_id", get_user_id()).execute()
-            current_manual_div = stock_res.data[0]["manual_dividend"] if stock_res.data else 0.0
-        except:
-            current_manual_div = 0.0
         
         with st.form("edit_txn_form"):
             st.write(f"### 📦 編輯 {edit_sym} 交易內容")
+            st.caption("💡 想設定該股的『今年預估股利』或補登除息?到「💰 股利管理」分頁")
             ec1, ec2 = st.columns(2)
             with ec1:
                 e_date = st.date_input("日期", value=pd.to_datetime(edit_row["date"]).date())
@@ -2623,19 +2617,10 @@ def page_transactions():
                 e_tax = st.number_input("交易稅", min_value=0, value=int(edit_row.get("tax", 0)), step=1)
             
             e_note = st.text_input("備註", value=edit_row.get("note") or "")
-
-            st.divider()
-            # 🌟 關鍵新增：手動股利覆寫欄位
-            st.write(f"### 💰 {edit_sym} 今年股利設定")
-            st.caption("填寫此欄位將覆寫系統自動抓取的殖利率，若要改回自動抓取請填 0")
-            e_manual_dividend = st.number_input("今年預估發放現金股利 (元/股)", 
-                                                min_value=0.0, 
-                                                value=float(current_manual_div or 0.0), 
-                                                step=0.1)
             
             if st.form_submit_button("💾 儲存所有變更", type="primary"):
                 try:
-                    # 1. 更新交易紀錄 (transactions 表)
+                    # 更新交易紀錄 (transactions 表)
                     supabase.table("transactions").update({
                         "date": str(e_date),
                         "action": e_action,
@@ -2646,22 +2631,191 @@ def page_transactions():
                         "note": e_note or None,
                     }).eq("id", edit_id).eq("user_id", get_user_id()).execute()
 
-                    # 2. 更新股票屬性 (stocks 表)
-                    supabase.table("stocks").update({
-                        "manual_dividend": e_manual_dividend
-                    }).eq("symbol", edit_sym).eq("user_id", get_user_id()).execute()
-
                     # 清除快取並刷新
                     st.cache_data.clear()
-                    st.success(f"✅ {edit_sym} 交易紀錄與股利設定已更新")
+                    st.success(f"✅ {edit_sym} 交易紀錄已更新")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 更新失敗: {e}")
     
     # ============================================
-    # Tab 3: 追蹤清單管理
+    # Tab 3: 💰 股利管理 (Phase 4.7)
     # ============================================
     with tab3:
+        st.subheader("💰 股利管理")
+        st.caption("管理你追蹤股票的股利資訊:預估年股利(用於 KPI) + 補登除息事件(用於含息成本計算)")
+        
+        stocks_list = load_stocks(get_user_id())
+        if not stocks_list:
+            st.info("尚未有追蹤股票,請先到「📈 追蹤清單管理」加入個股")
+        else:
+            # 選股票
+            stock_option_map = {f"{s['symbol']} {s['name']}": s['symbol'] for s in stocks_list}
+            div_label = st.selectbox(
+                "選擇要管理的股票",
+                list(stock_option_map.keys()),
+                key="div_mgmt_stock"
+            )
+            div_symbol = stock_option_map[div_label]
+            
+            st.divider()
+            
+            # === 區塊 1: 今年預估年股利 (manual_dividend) ===
+            st.markdown("#### 📊 今年預估年股利")
+            st.caption("覆寫系統自動抓取的數字 (例如:FinMind 抓到去年的,但你知道今年宣告 X 元)。填 0 = 改回自動抓取。")
+            
+            # 撈現有 manual_dividend
+            stock_res = supabase.table("stocks") \
+                .select("manual_dividend") \
+                .eq("symbol", div_symbol) \
+                .eq("user_id", get_user_id()) \
+                .execute()
+            current_manual = float(stock_res.data[0].get("manual_dividend") or 0) if stock_res.data else 0.0
+            
+            # 顯示自動抓取的值供對照
+            auto_div = get_latest_dividend(div_symbol)
+            st.caption(f"🤖 系統自動抓取最近一次除息: **{auto_div} 元/股** (作為參考)")
+            
+            col_md1, col_md2 = st.columns([1, 2])
+            with col_md1:
+                new_manual_div = st.number_input(
+                    "今年預估發放現金股利 (元/股)",
+                    min_value=0.0,
+                    value=current_manual,
+                    step=0.1,
+                    key=f"manual_div_{div_symbol}"
+                )
+            with col_md2:
+                st.markdown("&nbsp;")  # 空行對齊
+                if st.button(f"💾 儲存「今年預估股利」", key=f"save_manual_{div_symbol}"):
+                    try:
+                        supabase.table("stocks").update({
+                            "manual_dividend": new_manual_div
+                        }).eq("symbol", div_symbol).eq("user_id", get_user_id()).execute()
+                        st.cache_data.clear()
+                        if new_manual_div == 0:
+                            st.success(f"✅ 已改回自動抓取 ({auto_div} 元/股)")
+                        else:
+                            st.success(f"✅ {div_symbol} 預估股利更新為 {new_manual_div} 元/股")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 儲存失敗: {e}")
+            
+            st.divider()
+            
+            # === 區塊 2: 補登除息 (insert dividends) ===
+            st.markdown("#### 💵 補登除息(歷史事件)")
+            st.caption(
+                "用於 FinMind 還沒抓到的除息資料(通常公司除息後 1-2 週才會被收錄)。"
+                "**補登後立刻反映到「累積已領股息」與「含息成本」計算**。"
+            )
+            
+            with st.form(f"add_dividend_{div_symbol}", clear_on_submit=True):
+                col_d1, col_d2, col_d3 = st.columns([1, 1, 1])
+                with col_d1:
+                    new_ex_date = st.date_input(
+                        "除息日",
+                        value=datetime.now().date(),
+                        help="股價開始反映除息的日期(不是錢入帳的日期)"
+                    )
+                with col_d2:
+                    new_cash_div = st.number_input(
+                        "現金股利 (元/股)",
+                        min_value=0.0,
+                        value=0.0,
+                        step=0.1,
+                        help="每股配發的現金股利金額"
+                    )
+                with col_d3:
+                    new_stock_div = st.number_input(
+                        "股票股利 (元/股)",
+                        min_value=0.0,
+                        value=0.0,
+                        step=0.1,
+                        help="多數股票為 0,有配股才填"
+                    )
+                
+                submitted = st.form_submit_button("➕ 新增除息事件", type="primary")
+                
+                if submitted:
+                    if new_cash_div == 0 and new_stock_div == 0:
+                        st.error("❌ 現金股利跟股票股利至少要填一個")
+                    else:
+                        try:
+                            div_record = {
+                                "symbol": div_symbol,
+                                "ex_date": str(new_ex_date),
+                                "cash_dividend": float(new_cash_div),
+                                "stock_dividend": float(new_stock_div),
+                                "total_dividend": float(new_cash_div) + float(new_stock_div),
+                            }
+                            supabase.table("dividends").upsert(div_record).execute()
+                            st.cache_data.clear()
+                            st.success(
+                                f"✅ {div_symbol} 補登成功 "
+                                f"(除息日 {new_ex_date} / 現金 {new_cash_div} / 股票 {new_stock_div})"
+                            )
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 新增失敗: {e}")
+            
+            st.divider()
+            
+            # === 區塊 3: 該股的除息歷史 ===
+            st.markdown(f"#### 📜 {div_symbol} 除息歷史")
+            div_history = get_all_dividends(div_symbol)
+            
+            if not div_history:
+                st.info("尚無除息紀錄")
+            else:
+                # 顯示最近 10 筆,反向(最新在上)
+                recent_divs = sorted(div_history, key=lambda d: d.get("ex_date", ""), reverse=True)[:10]
+                df_div = pd.DataFrame(recent_divs)
+                
+                if "ex_date" in df_div.columns:
+                    df_div = df_div.rename(columns={
+                        "ex_date": "除息日",
+                        "cash_dividend": "現金股利(元/股)",
+                        "stock_dividend": "股票股利(元/股)",
+                        "total_dividend": "總股利(元/股)",
+                    })
+                    # 篩需要的欄位
+                    display_cols = [c for c in ["除息日", "現金股利(元/股)", "股票股利(元/股)", "總股利(元/股)"] if c in df_div.columns]
+                    st.dataframe(df_div[display_cols], use_container_width=True, hide_index=True)
+                    st.caption(f"顯示最近 {len(recent_divs)} 筆 (總共 {len(div_history)} 筆)")
+                
+                # 提供刪除功能(用 SQL,因為刪除少用,放在 expander)
+                with st.expander("⚠️ 刪除某筆除息紀錄(誤輸入時用)"):
+                    st.caption("輸入要刪除的除息日(YYYY-MM-DD),按下按鈕後不可恢復")
+                    del_col1, del_col2 = st.columns([2, 1])
+                    with del_col1:
+                        del_date = st.text_input(
+                            "除息日",
+                            placeholder="2026-06-17",
+                            key=f"del_date_{div_symbol}"
+                        )
+                    with del_col2:
+                        st.markdown("&nbsp;")
+                        if st.button("🗑️ 刪除", key=f"del_btn_{div_symbol}"):
+                            if not del_date:
+                                st.error("請輸入除息日")
+                            else:
+                                try:
+                                    supabase.table("dividends") \
+                                        .delete() \
+                                        .eq("symbol", div_symbol) \
+                                        .eq("ex_date", del_date) \
+                                        .execute()
+                                    st.cache_data.clear()
+                                    st.success(f"✅ 已刪除 {div_symbol} {del_date} 的除息紀錄")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ 刪除失敗: {e}")
+    
+    # ============================================
+    # Tab 4: 追蹤清單管理
+    # ============================================
+    with tab4:
         st.subheader("📈 追蹤清單管理")
         
         stocks = load_stocks(get_user_id())

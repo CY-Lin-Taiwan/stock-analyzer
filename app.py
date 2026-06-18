@@ -779,7 +779,69 @@ def page_stock_detail():
         show_ma60 = st.checkbox("60MA (季線)", value=False)
         days_range = st.slider("K線顯示天數", 30, 250, 90, step=10)
     
-# 1. 讀取該檔股票的歷史資料，準備計算估值
+    # ====================================================
+    # 1. 先撈最新股價資料(給 sticky header + KPI 用)
+    # ====================================================
+    prices = load_prices(selected_symbol)
+    if not prices:
+        st.warning(f"{selected_symbol} 尚未有資料")
+        return
+    
+    df_prices = pd.DataFrame(prices)
+    df_prices["date"] = pd.to_datetime(df_prices["date"])
+    df_prices = df_prices.sort_values("date").reset_index(drop=True)
+    df_prices["MA5"] = df_prices["close"].rolling(5).mean()
+    df_prices["MA20"] = df_prices["close"].rolling(20).mean()
+    df_prices["MA60"] = df_prices["close"].rolling(60).mean()
+    df_view = df_prices.tail(days_range).reset_index(drop=True)
+    
+    latest = df_view.iloc[-1]
+    prev = df_view.iloc[-2] if len(df_view) > 1 else latest
+    change = latest["close"] - prev["close"]
+    change_pct = (change / prev["close"]) * 100
+
+    # 算 holding_context (給 AI 觀察跟結果顯示用)
+    all_txns = load_transactions(get_user_id())
+    valuation = load_latest_valuation(get_user_id())
+    val_data = valuation.get(selected_symbol, {})
+    holding_ctx = ai_analyzer.build_holding_context(
+    symbol=selected_symbol,
+    transactions=all_txns,
+    current_price=val_data.get("close", 0),
+    )
+    
+    # === Sticky Header(scroll 時固定在最上方) ===
+    render_sticky_stock_header(selected_label, latest, change, change_pct)
+    
+    # === KPI 卡片 ===
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("最新收盤", f"{latest['close']:,.2f}", f"{change:+.2f} ({change_pct:+.2f}%)")
+    c2.metric("開盤", f"{latest['open']:,.2f}")
+    c3.metric("最高", f"{latest['high']:,.2f}")
+    c4.metric("最低", f"{latest['low']:,.2f}")
+    c5.metric("成交量(張)", f"{latest['volume']/1000:,.0f}")
+    
+    # PE 訊息
+    if pd.notna(latest.get("pe")):
+        pe_pct = calc_pe_percentile(selected_symbol, latest["pe"])
+        pe_msg = f"目前 PE: **{latest['pe']:.2f}**"
+        if pe_pct is not None:
+            pe_msg += f" | 在過去 3 年的第 **{int(pe_pct)}** 百分位"
+            if pe_pct >= 70:
+                pe_msg += " 🔴 偏貴"
+            elif pe_pct >= 30:
+                pe_msg += " 🟡 中間"
+            else:
+                pe_msg += " 🟢 偏便宜"
+        st.info(pe_msg)
+    
+    st.caption(f"資料日期:{latest['date'].strftime('%Y-%m-%d')} | 顯示 {len(df_view)} 筆 (全部 {len(df_prices)} 筆)")
+    
+    st.divider()
+    
+    # ====================================================
+    # 2. 估值看板(從 PE 歷史資料算)
+    # ====================================================
     df = load_pe_history(selected_symbol) 
     
     if not df.empty:
@@ -790,7 +852,7 @@ def page_stock_detail():
         pe_percentile = calc_pe_percentile(selected_symbol, current_pe)
         pb_percentile = calc_pb_percentile(selected_symbol, current_pb)
         
-        # 2. 渲染估值看板
+        # 估值看板
         st.subheader("📊 估值看板")
         vcol1, vcol2, vcol3 = st.columns(3)
         with vcol1:
@@ -927,62 +989,8 @@ def page_stock_detail():
         st.warning("尚無此檔股票的歷史估值資料。")
 
 
-    prices = load_prices(selected_symbol)
-    if not prices:
-        st.warning(f"{selected_symbol} 尚未有資料")
-        return
-    
-    df = pd.DataFrame(prices)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-    df["MA5"] = df["close"].rolling(5).mean()
-    df["MA20"] = df["close"].rolling(20).mean()
-    df["MA60"] = df["close"].rolling(60).mean()
-    df_view = df.tail(days_range).reset_index(drop=True)
-    
-    latest = df_view.iloc[-1]
-    prev = df_view.iloc[-2] if len(df_view) > 1 else latest
-    change = latest["close"] - prev["close"]
-    change_pct = (change / prev["close"]) * 100
-
-    # 算 holding_context (給 AI 觀察跟結果顯示用)
-    all_txns = load_transactions(get_user_id())
-    valuation = load_latest_valuation(get_user_id())
-    val_data = valuation.get(selected_symbol, {})
-    holding_ctx = ai_analyzer.build_holding_context(
-    symbol=selected_symbol,
-    transactions=all_txns,
-    current_price=val_data.get("close", 0),
-    )
-    
-    # === Sticky Header(scroll 時固定在最上方) ===
-    render_sticky_stock_header(selected_label, latest, change, change_pct)
-    
-    # === KPI 卡片 ===
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("最新收盤", f"{latest['close']:,.2f}", f"{change:+.2f} ({change_pct:+.2f}%)")
-    c2.metric("開盤", f"{latest['open']:,.2f}")
-    c3.metric("最高", f"{latest['high']:,.2f}")
-    c4.metric("最低", f"{latest['low']:,.2f}")
-    c5.metric("成交量(張)", f"{latest['volume']/1000:,.0f}")
-    
-    # PE 訊息
-    if pd.notna(latest.get("pe")):
-        pe_pct = calc_pe_percentile(selected_symbol, latest["pe"])
-        pe_msg = f"目前 PE: **{latest['pe']:.2f}**"
-        if pe_pct is not None:
-            pe_msg += f" | 在過去 3 年的第 **{int(pe_pct)}** 百分位"
-            if pe_pct >= 70:
-                pe_msg += " 🔴 偏貴"
-            elif pe_pct >= 30:
-                pe_msg += " 🟡 中間"
-            else:
-                pe_msg += " 🟢 偏便宜"
-        st.info(pe_msg)
-    
-    st.caption(f"資料日期:{latest['date'].strftime('%Y-%m-%d')} | 顯示 {len(df_view)} 筆 (全部 {len(df)} 筆)")
-    
     # === K 線圖 ===
+    df = df_prices  # alias 給後續沿用
     st.subheader("📊 K 線圖")
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         vertical_spacing=0.03, row_heights=[0.75, 0.25])
@@ -2710,7 +2718,16 @@ def page_transactions():
                 "**補登後立刻反映到「累積已領股息」與「含息成本」計算**。"
             )
             
-            with st.form(f"add_dividend_{div_symbol}", clear_on_submit=True):
+            # 警示文字 (防護 3)
+            st.warning(
+                "⚠️ **補登前請確認:**\n"
+                "- **除息日**:股價開始反映除息的日期(不是錢入帳的日期)\n"
+                "- **金額**:每股配發的現金股利(從公司公告或新聞確認)\n"
+                "- 若 FinMind 之後抓到不同數字,會自動覆寫你的補登\n"
+                "- 若不確定,寧可等 FinMind 抓到(避免「日期輸錯」造成累積已領股息雙重計算)"
+            )
+            
+            with st.form(f"add_dividend_{div_symbol}", clear_on_submit=False):
                 col_d1, col_d2, col_d3 = st.columns([1, 1, 1])
                 with col_d1:
                     new_ex_date = st.date_input(
@@ -2741,23 +2758,85 @@ def page_transactions():
                     if new_cash_div == 0 and new_stock_div == 0:
                         st.error("❌ 現金股利跟股票股利至少要填一個")
                     else:
-                        try:
-                            div_record = {
+                        # === 防護 1: 檢查同 ex_date 是否已存在 ===
+                        existing = supabase.table("dividends") \
+                            .select("ex_date, cash_dividend, stock_dividend") \
+                            .eq("symbol", div_symbol) \
+                            .eq("ex_date", str(new_ex_date)) \
+                            .execute()
+                        
+                        if existing.data and len(existing.data) > 0:
+                            # 已存在,顯示確認區塊
+                            old = existing.data[0]
+                            old_cash = old.get("cash_dividend", 0)
+                            old_stock = old.get("stock_dividend", 0)
+                            
+                            # 用 session_state 儲存「pending」資料
+                            pending_key = f"pending_div_{div_symbol}_{new_ex_date}"
+                            st.session_state[pending_key] = {
                                 "symbol": div_symbol,
                                 "ex_date": str(new_ex_date),
-                                "cash_dividend": float(new_cash_div),
-                                "stock_dividend": float(new_stock_div),
-                                "total_dividend": float(new_cash_div) + float(new_stock_div),
+                                "cash": float(new_cash_div),
+                                "stock": float(new_stock_div),
+                                "old_cash": old_cash,
+                                "old_stock": old_stock,
+                            }
+                            st.warning(
+                                f"⚠️ {div_symbol} 在 {new_ex_date} 已有除息紀錄:\n"
+                                f"- 現有: 現金 {old_cash} / 股票 {old_stock}\n"
+                                f"- 新值: 現金 {new_cash_div} / 股票 {new_stock_div}\n\n"
+                                f"確認要覆寫嗎?請按下方「✅ 覆寫確認」按鈕"
+                            )
+                        else:
+                            # 不存在,直接 insert
+                            try:
+                                div_record = {
+                                    "symbol": div_symbol,
+                                    "ex_date": str(new_ex_date),
+                                    "cash_dividend": float(new_cash_div),
+                                    "stock_dividend": float(new_stock_div),
+                                    "total_dividend": float(new_cash_div) + float(new_stock_div),
+                                }
+                                supabase.table("dividends").upsert(div_record).execute()
+                                st.cache_data.clear()
+                                st.success(
+                                    f"✅ {div_symbol} 補登成功 "
+                                    f"(除息日 {new_ex_date} / 現金 {new_cash_div} / 股票 {new_stock_div})"
+                                )
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ 新增失敗: {e}")
+            
+            # === 防護 1 的覆寫確認按鈕 ===
+            # 找該股的待覆寫紀錄
+            for key in list(st.session_state.keys()):
+                if key.startswith(f"pending_div_{div_symbol}_"):
+                    pending = st.session_state[key]
+                    if st.button(
+                        f"✅ 覆寫確認 ({pending['ex_date']}: 現金 {pending['old_cash']} → {pending['cash']})",
+                        type="primary",
+                        key=f"confirm_overwrite_{key}"
+                    ):
+                        try:
+                            div_record = {
+                                "symbol": pending["symbol"],
+                                "ex_date": pending["ex_date"],
+                                "cash_dividend": pending["cash"],
+                                "stock_dividend": pending["stock"],
+                                "total_dividend": pending["cash"] + pending["stock"],
                             }
                             supabase.table("dividends").upsert(div_record).execute()
                             st.cache_data.clear()
-                            st.success(
-                                f"✅ {div_symbol} 補登成功 "
-                                f"(除息日 {new_ex_date} / 現金 {new_cash_div} / 股票 {new_stock_div})"
-                            )
+                            del st.session_state[key]
+                            st.success(f"✅ {pending['symbol']} {pending['ex_date']} 已覆寫")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"❌ 新增失敗: {e}")
+                            st.error(f"❌ 覆寫失敗: {e}")
+                    
+                    # 取消按鈕
+                    if st.button("❌ 取消", key=f"cancel_overwrite_{key}"):
+                        del st.session_state[key]
+                        st.rerun()
             
             st.divider()
             

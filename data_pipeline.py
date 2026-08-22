@@ -22,6 +22,27 @@ finmind.login_by_token(api_token=os.getenv("FINMIND_TOKEN"))
 
 
 # ============================================================
+# 工具函式
+# ============================================================
+def is_etf(symbol: str) -> bool:
+    """
+    判斷是否為 ETF(代號以 00 開頭:0050 / 00878 / 00953B / 009816 / 00403A)
+
+    ETF 沒有 PE、月營收、財報、也不會減資,
+    對這些 API 的呼叫必定回空,純浪費額度。
+    """
+    return symbol.startswith("00")
+
+
+def print_api_usage(label: str = ""):
+    """印出 FinMind API 用量(額度按小時重置)"""
+    try:
+        print(f"📊 API 用量{label}: {finmind.api_usage} / {finmind.api_usage_limit}")
+    except Exception as e:
+        print(f"📊 API 用量查詢失敗: {e}")
+
+
+# ============================================================
 # Fetch 函式:從 FinMind 抓資料
 # ============================================================
 def fetch_daily_prices(symbol: str, start_date: str, end_date: str = None) -> pd.DataFrame:
@@ -308,9 +329,96 @@ def fetch_dividends(symbol: str, start_date: str, end_date: str = None) -> pd.Da
     return df[["symbol", "ex_date", "cash_dividend", "stock_dividend", "total_dividend"]]
 
 
+def fetch_corporate_actions(symbol: str, start_date: str) -> pd.DataFrame:
+    """
+    抓「會造成股價跳空」的公司行為參考價,供還原股價使用。
+
+    為什麼需要:
+      daily_prices 存的是原始收盤價,除權息當天會跳空。技術指標(KD / 布林)
+      吃到這個缺口會嚴重失真 —— 例如長榮 2023-06-30 配息 70 元,
+      原始 K 值 23.6(看似超賣),還原後真實值 80.2(其實超買)。
+
+    調整因子取自交易所公告參考價,不自己算股利公式:
+        r = reference_price / before_price
+    (不可用 after_price,那是除息當天實際收盤,含當天市場波動)
+    """
+    rows = []
+
+    # --- 除權除息結果表 ---
+    try:
+        dr = finmind.taiwan_stock_dividend_result(
+            stock_id=symbol, start_date=start_date
+        )
+        if not dr.empty:
+            for _, r in dr.iterrows():
+                rows.append({
+                    "symbol": symbol,
+                    "action_date": str(r["date"])[:10],
+                    "kind": "除權息",
+                    "before_price": float(r["before_price"]),
+                    "reference_price": float(r["reference_price"]),
+                    "note": str(r.get("stock_or_cache_dividend", "") or ""),
+                })
+    except Exception as e:
+        print(f"  [除權息參考價] ❌ {e}")
+
+    # --- 減資恢復買賣參考價(ETF 不會減資,直接跳過省一次呼叫)---
+    if not is_etf(symbol):
+        time.sleep(0.5)
+        try:
+            cr = finmind.taiwan_stock_capital_reduction_reference_price(
+                stock_id=symbol, start_date=start_date
+            )
+            if not cr.empty:
+                for _, r in cr.iterrows():
+                    rows.append({
+                        "symbol": symbol,
+                        "action_date": str(r["date"])[:10],
+                        "kind": "減資",
+                        "before_price": float(r["ClosingPriceonTheLastTradingDay"]),
+                        "reference_price": float(r["PostReductionReferencePrice"]),
+                        "note": str(r.get("ReasonforCapitalReduction", "") or ""),
+                    })
+        except Exception as e:
+            # 多數個股從未減資,抓不到屬正常
+            print(f"  [減資參考價] ⚠️ 無資料或失敗(未減資屬正常): {e}")
+
+    return pd.DataFrame(rows)
+
+
+def upsert_corporate_actions(df: pd.DataFrame) -> int:
+    """寫入公司行為參考價"""
+    if df.empty:
+        return 0
+
+    # FinMind 偶爾回重複列,同一批 upsert 撞主鍵會整批失敗
+    df = df.drop_duplicates(subset=["symbol", "action_date", "kind"], keep="last")
+
+    records = df.to_dict(orient="records")
+    for r in records:
+        r["action_date"] = str(r["action_date"])
+        for k, v in list(r.items()):
+            if pd.isna(v):
+                r[k] = None
+
+    batch_size = 200
+    total = 0
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i + batch_size]
+        supabase.table("corporate_actions").upsert(batch).execute()
+        total += len(batch)
+    return total
+
+
 def upsert_dividends(df: pd.DataFrame) -> int:
     if df.empty:
         return 0
+
+    # ETF 季配/月配 + 「除息日空白用公告日暫代」會把多筆壓到同一天,
+    # 撞到主鍵 (symbol, ex_date) 導致整批 upsert 失敗:
+    #   ON CONFLICT DO UPDATE command cannot affect row a second time
+    df = df.drop_duplicates(subset=["symbol", "ex_date"], keep="last")
+
     records = df.to_dict(orient="records")
     for r in records:
         r["ex_date"] = str(r["ex_date"])
@@ -522,39 +630,55 @@ def sync_symbol(symbol: str, days_back: int = 1095):
         print(f"  ⚠️ {symbol} 無股價資料,跳過")
         return
     
-    # 2) PE/PB/殖利率
-    time.sleep(0.5)
-    valuation = fetch_per_pbr(symbol, start_date)
-    
-    merged = merge_price_and_valuation(prices, valuation)
-    count_p = upsert_prices(merged)
-    has_pe = "✅" if not valuation.empty else "❌"
-    print(f"  [股價] 寫入 {count_p} 筆 (PE: {has_pe})")
-    
-    # 3) 月營收
-    time.sleep(0.5)
-    revenue = fetch_monthly_revenue(symbol, start_date)
-    if not revenue.empty:
-        count_r = upsert_monthly_revenue(revenue)
-        print(f"  [月營收] 寫入 {count_r} 筆")
+    if is_etf(symbol):
+        # ETF 沒有 PE / 月營收 / 財報,這三支 API 必定回空 → 跳過省 4 次呼叫
+        count_p = upsert_prices(prices)
+        print(f"  [股價] 寫入 {count_p} 筆 (ETF:跳過 PE / 月營收 / 季報)")
     else:
-        print(f"  [月營收] ⚠️ 無資料")
-    
-    # 4) 季報財務
-    time.sleep(0.5)
-    try:
-        income = fetch_quarterly_income(symbol, start_date)
+        # 2) PE/PB/殖利率
         time.sleep(0.5)
-        balance = fetch_quarterly_balance(symbol, start_date)
-        
-        qfin = build_quarterly_financials(income, balance, symbol)
-        if not qfin.empty:
-            count_q = upsert_quarterly_financials(qfin)
-            print(f"  [季報] 寫入 {count_q} 筆")
+        valuation = fetch_per_pbr(symbol, start_date)
+
+        merged = merge_price_and_valuation(prices, valuation)
+        count_p = upsert_prices(merged)
+        has_pe = "✅" if not valuation.empty else "❌"
+        print(f"  [股價] 寫入 {count_p} 筆 (PE: {has_pe})")
+
+        # 3) 月營收
+        time.sleep(0.5)
+        revenue = fetch_monthly_revenue(symbol, start_date)
+        if not revenue.empty:
+            count_r = upsert_monthly_revenue(revenue)
+            print(f"  [月營收] 寫入 {count_r} 筆")
         else:
-            print(f"  [季報] ⚠️ 無資料")
-    except Exception as e:
-        print(f"  [季報] ❌ 抓取失敗: {e}")
+            print(f"  [月營收] ⚠️ 無資料")
+
+        # 4) 季報財務(抓 5 年,與 dividends 對齊)
+        #
+        # 為什麼不跟著 days_back 的 3 年:
+        #   配息率 = N 年配息 ÷ N−1 年度全年 EPS,需要「四季齊全」的年度。
+        #   3 年只會蓋到約 12 季,最舊那年往往缺 Q1(被回看範圍切掉),
+        #   實測長榮只剩 2 個年度可算配息率 —— 而 2 個樣本不足以判斷
+        #   「是否為固定比例配發政策」,等於那個功能永遠觸發不了。
+        #   循環股要看「谷底年賺多少」也需要更長的區間。
+        #
+        # 成本:FinMind 按「請求次數」計費,抓 3 年和 5 年都是同樣 2 次呼叫,
+        #       只是 start_date 往前推 —— 額度零增加。
+        fin_start_date = (datetime.now() - timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+        time.sleep(0.5)
+        try:
+            income = fetch_quarterly_income(symbol, fin_start_date)
+            time.sleep(0.5)
+            balance = fetch_quarterly_balance(symbol, fin_start_date)
+
+            qfin = build_quarterly_financials(income, balance, symbol)
+            if not qfin.empty:
+                count_q = upsert_quarterly_financials(qfin)
+                print(f"  [季報] 寫入 {count_q} 筆")
+            else:
+                print(f"  [季報] ⚠️ 無資料")
+        except Exception as e:
+            print(f"  [季報] ❌ 抓取失敗: {e}")
     
     # 5) 籌碼:三大法人(只抓 1 年)
     time.sleep(0.5)
@@ -605,16 +729,109 @@ def sync_symbol(symbol: str, days_back: int = 1095):
     except Exception as e:
         print(f"  [除權息] ❌ 失敗: {e}")
 
-        
+    # 9) 公司行為參考價(還原股價用,抓 5 年)
+    # 範圍必須比股價(3 年)更長,事件要涵蓋價格序列起點之前,
+    # 否則最舊那段的累積調整因子會算錯。
+    time.sleep(0.5)
+    try:
+        ca_start = (datetime.now() - timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+        ca = fetch_corporate_actions(symbol, ca_start)
+        if not ca.empty:
+            count_a = upsert_corporate_actions(ca)
+            print(f"  [公司行為] 寫入 {count_a} 筆")
+        else:
+            print(f"  [公司行為] ⚠️ 無資料")
+    except Exception as e:
+        print(f"  [公司行為] ❌ 失敗: {e}")
+
+
+def sync_symbol_light(symbol: str, days_back: int = 30):
+    """
+    輕量同步:只更新「每天都會變」的資料。
+
+    為什麼要分輕重:
+      完整同步一輪約 296 次 API 呼叫,而 FinMind 免費額度是 600/小時 ——
+      一小時只跑得動一輪。但每天真正會變的只有股價與籌碼,
+      月營收一個月才一次、季報三個月才一次、股利一年才幾次。
+
+    呼叫成本:個股 3 次(股價 + PE + 法人),ETF 2 次(無 PE)
+      → 31 檔約 90 次,不到完整同步的三分之一。
+
+    ⚠️ 刻意不碰月營收:
+      fetch_monthly_revenue() 用 pct_change(12) 算 YoY,
+      抓取範圍縮短會只拿到少數幾筆,YoY 變成 NaN 後 upsert 覆蓋掉
+      原本正確的值 —— 這是縮短天數最容易踩的坑,故整支跳過。
+    """
+    start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    print(f"[輕量] {symbol} 從 {start_date}...")
+
+    prices = fetch_daily_prices(symbol, start_date)
+    if prices.empty:
+        print(f"  ⚠️ 無股價資料,跳過")
+        return
+
+    if is_etf(symbol):
+        print(f"  [股價] 寫入 {upsert_prices(prices)} 筆 (ETF)")
+    else:
+        time.sleep(0.4)
+        valuation = fetch_per_pbr(symbol, start_date)
+        merged = merge_price_and_valuation(prices, valuation)
+        has_pe = "✅" if not valuation.empty else "❌"
+        print(f"  [股價] 寫入 {upsert_prices(merged)} 筆 (PE: {has_pe})")
+
+    time.sleep(0.4)
+    try:
+        chips = fetch_institutional(symbol, start_date)
+        if not chips.empty:
+            print(f"  [法人] 寫入 {upsert_chips(chips)} 筆")
+        else:
+            print(f"  [法人] ⚠️ 無資料")
+    except Exception as e:
+        print(f"  [法人] ❌ {e}")
+
+
+def sync_all_light(days_back: int = 30):
+    """輕量同步全部持股(平日日更用)"""
+    result = supabase.table("stocks").select("symbol").execute()
+    symbols = sorted({row["symbol"] for row in result.data})
+    cost = sum(2 if is_etf(s) else 3 for s in symbols)
+
+    print(f"\n{'='*50}")
+    print(f"輕量同步 {len(symbols)} 檔(只更新股價與籌碼,回看 {days_back} 天)")
+    print(f"預估 API 呼叫:{cost} 次")
+    print(f"{'='*50}")
+    print_api_usage("(開始前)")
+    print()
+
+    start_time = time.time()
+    for i, symbol in enumerate(symbols, 1):
+        try:
+            sync_symbol_light(symbol, days_back=days_back)
+        except Exception as e:
+            print(f"  ❌ {symbol} 失敗: {e}")
+        if i < len(symbols):
+            time.sleep(0.5)
+
+    print(f"\n{'='*50}")
+    print(f"輕量同步完成 ✓ (耗時 {time.time() - start_time:.1f} 秒)")
+    print_api_usage("(結束後)")
+    print(f"{'='*50}\n")
+
+
 def sync_all_holdings(days_back: int = 1095):
     """同步所有持股"""
     result = supabase.table("stocks").select("symbol").execute()
-    symbols = [row["symbol"] for row in result.data]
-    
+    # 去重:stocks 表有 user_id,同一檔被多筆持有會重複同步(純浪費額度)
+    symbols = sorted({row["symbol"] for row in result.data})
+    n_etf = sum(1 for s in symbols if is_etf(s))
+
     print(f"\n{'='*50}")
     print(f"開始同步 {len(symbols)} 檔個股(回看 {days_back} 天 ≈ {days_back//365} 年)")
-    print(f"{'='*50}\n")
-    
+    print(f"其中 ETF {n_etf} 檔(跳過 PE / 月營收 / 季報 / 減資)")
+    print(f"{'='*50}")
+    print_api_usage("(開始前)")
+    print()
+
     start_time = time.time()
     for symbol in symbols:
         try:
@@ -626,8 +843,21 @@ def sync_all_holdings(days_back: int = 1095):
     elapsed = time.time() - start_time
     print(f"\n{'='*50}")
     print(f"全部完成 ✓ (耗時 {elapsed:.1f} 秒)")
+    print_api_usage("(結束後)")
     print(f"{'='*50}\n")
 
 
 if __name__ == "__main__":
-    sync_all_holdings(days_back=1095)
+    import sys
+
+    mode = sys.argv[1] if len(sys.argv) > 1 else "full"
+    if mode in ("light", "-l", "--light"):
+        # 平日日更:只更新股價與籌碼,約 90 次呼叫
+        sync_all_light()
+    elif mode in ("full", "-f", "--full"):
+        # 完整同步:所有資料,約 296 次呼叫(免費額度 600/小時)
+        sync_all_holdings(days_back=1095)
+    else:
+        print("用法:")
+        print("  python3 data_pipeline.py          # 完整同步(約 296 次呼叫)")
+        print("  python3 data_pipeline.py light    # 輕量日更(約 90 次呼叫)")

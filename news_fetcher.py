@@ -11,10 +11,17 @@ News Fetcher - 抓取個股相關新聞(白名單版)
     (節省 token、避免幻覺)
   - 失敗 graceful: 抓不到 → 回空 list,不影響 AI 觀察
 """
+import socket
+
 import feedparser
 from datetime import datetime, timezone
 from urllib.parse import quote, urlparse
 from typing import List, Dict, Optional
+
+
+# 抓新聞的逾時(秒)。抓不到就回空 list,不影響 AI 觀察 ——
+# 新聞是加分項,不該讓它把整個流程卡死。
+NEWS_TIMEOUT = 10
 
 
 # === 白名單財經媒體網域 ===
@@ -117,7 +124,15 @@ def fetch_news(symbol: str, name: str, days: int = 7, limit: int = 10) -> List[D
     )
     
     try:
-        feed = feedparser.parse(rss_url)
+        # ⚠️ feedparser 底層用 urllib,預設 socket timeout 是 None ——
+        # 也就是「無限等待」。Google News RSS 連不上時會永遠卡住,
+        # 而呼叫端(AI 觀察)只會顯示一直在跑,查不出原因。
+        _old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(NEWS_TIMEOUT)
+        try:
+            feed = feedparser.parse(rss_url)
+        finally:
+            socket.setdefaulttimeout(_old_timeout)
         
         if not feed.entries:
             return []

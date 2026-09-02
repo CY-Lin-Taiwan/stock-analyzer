@@ -19,8 +19,10 @@ from urllib.parse import quote, urlparse
 from typing import List, Dict, Optional
 
 
-# 抓新聞的逾時(秒)。抓不到就回空 list,不影響 AI 觀察 ——
-# 新聞是加分項,不該讓它把整個流程卡死。
+# 抓新聞的逾時(秒)。feedparser 底層用 urllib,預設 socket timeout 是 None,
+# 也就是「無限等待」—— Google News 連不上時會永遠卡住,而呼叫端
+# (AI 觀察)只會顯示一直在跑,查不出原因。
+# 抓不到就回空 list,不影響分析 —— 新聞是加分項,不該卡死整個流程。
 NEWS_TIMEOUT = 10
 
 
@@ -124,15 +126,7 @@ def fetch_news(symbol: str, name: str, days: int = 7, limit: int = 10) -> List[D
     )
     
     try:
-        # ⚠️ feedparser 底層用 urllib,預設 socket timeout 是 None ——
-        # 也就是「無限等待」。Google News RSS 連不上時會永遠卡住,
-        # 而呼叫端(AI 觀察)只會顯示一直在跑,查不出原因。
-        _old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(NEWS_TIMEOUT)
-        try:
-            feed = feedparser.parse(rss_url)
-        finally:
-            socket.setdefaulttimeout(_old_timeout)
+        feed = feedparser.parse(rss_url)
         
         if not feed.entries:
             return []
@@ -170,6 +164,241 @@ def fetch_news(symbol: str, name: str, days: int = 7, limit: int = 10) -> List[D
         
     except Exception as e:
         print(f"[news_fetcher] 抓取失敗 {symbol} {name}: {e}")
+        return []
+
+
+# 產業關鍵字正規化。
+#
+# ⚠️ 產業欄位是使用者手動填的自由文字,無法預先窮舉。
+# 所以策略是:**優先直接用使用者填的字**,只有在明顯查不到的情況
+# (過長的複合名稱,例如「電子IC導線架」「被動元件MLCC」)才做映射。
+# 下表只是常見情況的補救,不是完整清單 —— 真正的解法是把「實際用了
+# 哪些關鍵字」顯示給使用者看,讓他自己調整產業欄位的寫法。
+INDUSTRY_KEYWORDS = {
+    "航運": "航運", "航運業": "航運", "貨櫃": "航運",
+    "半導體": "半導體", "半導體業": "半導體",
+    "電子零組件": "電子零組件", "電子零組件業": "電子零組件",
+    "被動元件MLCC": "被動元件", "被動元件": "被動元件",
+    "功率元件": "功率半導體", "電子IC導線架": "半導體封測",
+    "PCB": "PCB", "印刷電路板": "PCB", "載板": "ABF載板",
+    "金融": "金融股", "金融保險": "金融股", "銀行": "金融股",
+    "光電": "光電", "電腦及週邊設備": "電腦周邊",
+    "通信網路": "網通", "其他電子": "電子股",
+    "鋼鐵": "鋼鐵", "塑膠": "塑化", "紡織": "紡織",
+    "生技醫療": "生技", "汽車": "汽車零組件",
+}
+
+
+MAX_SEARCHABLE_LEN = 5     # 超過這個長度的產業名,新聞標題裡幾乎不會出現
+
+
+def normalize_industries(industries: List[str], limit: int = 3) -> List[str]:
+    """
+    把產業欄位轉成新聞查得到的關鍵字。
+
+    順序:
+      1. 名稱夠短(≤5 字)→ 直接用,不動使用者填的字
+      2. 太長 → 先查對照表,再試子字串比對
+      3. 都不行 → 仍然用原字(至少誠實反映使用者的輸入)
+    """
+    out = []
+    for ind in (industries or []):
+        ind = (ind or "").strip()
+        if not ind or ind == "-":
+            continue
+
+        if len(ind) <= MAX_SEARCHABLE_LEN:
+            kw = ind                       # 使用者填得夠精簡就直接用
+        else:
+            kw = INDUSTRY_KEYWORDS.get(ind)
+            if not kw:
+                for k, v in INDUSTRY_KEYWORDS.items():
+                    if k in ind:
+                        kw = v
+                        break
+            kw = kw or ind                 # 仍找不到就用原字
+
+        if kw not in out:
+            out.append(kw)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def fetch_industry_news(industries: List[str], days: int = 3,
+                        limit: int = 10) -> List[Dict]:
+    """
+    抓「產業層級」的新聞 —— 給組合分析用。
+
+    組合分析要看的是環境,不是個股(個股新聞在個股頁已經有了)。
+    產業新聞才回答「為什麼這幾檔一起動」,那是組合層級該問的問題。
+
+    Args:
+        industries: 產業名稱(建議傳權重最大的幾個)
+    """
+    kws = normalize_industries(industries, limit=3)
+    if not kws:
+        print("[news_fetcher] 產業新聞:沒有可用的產業關鍵字")
+        return []
+    site_filter = " OR ".join(f"site:{d}" for d in TRUSTED_DOMAINS)
+    query = f"({' OR '.join(kws)}) ({site_filter})"
+    out = _search_news(query, days=days, limit=limit,
+                       label=f"產業新聞({'、'.join(kws)})")
+    # 把實際用的關鍵字掛在結果上,讓 UI 顯示給使用者 ——
+    # 產業欄位是他填的,他才知道該怎麼改才查得到
+    for item in out:
+        item["_keywords"] = kws
+    if not out:
+        return [{"_keywords": kws, "_empty": True}]
+    return out
+
+
+def _search_news(query: str, days: int, limit: int, label: str) -> List[Dict]:
+    """共用的 RSS 查詢與解析"""
+    rss_url = (f"https://news.google.com/rss/search?q={quote(query)}"
+               f"&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    try:
+        _old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(NEWS_TIMEOUT)
+        try:
+            feed = feedparser.parse(rss_url)
+        finally:
+            socket.setdefaulttimeout(_old)
+        if not feed.entries:
+            print(f"[news_fetcher] {label}:0 則")
+            return []
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        out = []
+        for e in feed.entries[:limit * 3]:
+            dt = _parse_published(e)
+            if dt and dt.timestamp() < cutoff:
+                continue
+            title = e.get("title", "").strip()
+            src = ""
+            if " - " in title:
+                parts = title.rsplit(" - ", 1)
+                title, src = parts[0].strip(), parts[1].strip()
+            out.append({"title": title, "source": src or "",
+                        "age": _format_age(dt), "link": e.get("link", "")})
+            if len(out) >= limit:
+                break
+        print(f"[news_fetcher] {label}:{len(out)} 則")
+        return out
+    except Exception as e:
+        print(f"[news_fetcher] {label} 失敗: {e}")
+        return []
+
+
+def fetch_portfolio_news(names: List[str], days: int = 3,
+                         limit: int = 10) -> List[Dict]:
+    """
+    抓「跟持股相關」的新聞 —— 給組合分析用。
+
+    先前用「台股 加權指數 大盤」這種泛用關鍵字查,結果常常抓不到 ——
+    白名單媒體的標題不見得含那些字。改用實際持股名稱(取權重最大的幾檔)
+    以 OR 串成單一查詢,一次呼叫抓完,而且結果直接跟組合相關。
+
+    Args:
+        names: 持股名稱(建議傳權重最大的 3~5 檔)
+    """
+    names = [n for n in (names or []) if n][:5]
+    if not names:
+        return []
+    # 連字號在 Google 搜尋語法裡是「排除」運算子 ——
+    # 「三集瑞-KY」可能被解析成「三集瑞 且 不含 KY」,整個查詢就歪了。
+    # 統一去掉,用主名稱查即可。
+    names = [n.split("-")[0].strip() for n in names]
+    site_filter = " OR ".join(f"site:{d}" for d in TRUSTED_DOMAINS)
+    keyword = " OR ".join(names)          # 不加引號,降低查詢複雜度
+    query = f"({keyword}) ({site_filter})"
+    rss_url = (f"https://news.google.com/rss/search?q={quote(query)}"
+               f"&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    try:
+        _old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(NEWS_TIMEOUT)
+        try:
+            feed = feedparser.parse(rss_url)
+        finally:
+            socket.setdefaulttimeout(_old)
+        if not feed.entries:
+            # 退路:合併查詢失敗時,改用「個股查詢」逐檔抓再合併。
+            # 個股查詢的字串簡單得多,實測穩定;成本是多幾次呼叫,
+            # 所以只對權重最大的兩檔做。
+            print(f"[news_fetcher] 組合新聞:合併查詢無結果,改逐檔抓")
+            merged, seen = [], set()
+            for nm in names[:2]:
+                for item in fetch_news(nm, nm, days=days, limit=5):
+                    if item["title"] in seen:
+                        continue
+                    seen.add(item["title"])
+                    merged.append(item)
+            print(f"[news_fetcher] 組合新聞(逐檔):{len(merged)} 則")
+            return merged[:limit]
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        out = []
+        for e in feed.entries[:limit * 3]:
+            dt = _parse_published(e)
+            if dt and dt.timestamp() < cutoff:
+                continue
+            title = e.get("title", "").strip()
+            src = ""
+            if " - " in title:
+                parts = title.rsplit(" - ", 1)
+                title, src = parts[0].strip(), parts[1].strip()
+            out.append({"title": title, "source": src or "",
+                        "age": _format_age(dt), "link": e.get("link", "")})
+            if len(out) >= limit:
+                break
+        print(f"[news_fetcher] 組合新聞:{len(out)} 則")
+        return out
+    except Exception as e:
+        print(f"[news_fetcher] 組合新聞抓取失敗: {e}")
+        return []
+
+
+def fetch_market_news(days: int = 3, limit: int = 8) -> List[Dict]:
+    """
+    抓「大盤層級」的新聞 —— 給組合分析用。
+
+    為什麼需要:工具裡所有數值資料都是已發生的(價格、籌碼、財報)。
+    新聞是唯一帶有「市場預期」與「敘事」的來源,而先前只用在個股觀察,
+    組合層級完全沒有 —— 於是 AI 只能就已發生的數字重組,
+    產不出任何前瞻性的內容。
+
+    刻意抓比較短的天數(3 天):組合分析要的是「現在的氛圍」,
+    不是一週前的新聞。
+    """
+    site_filter = " OR ".join(f"site:{d}" for d in TRUSTED_DOMAINS)
+    query = f"台股 加權指數 大盤 ({site_filter})"
+    rss_url = (f"https://news.google.com/rss/search?q={quote(query)}"
+               f"&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    try:
+        _old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(NEWS_TIMEOUT)
+        try:
+            feed = feedparser.parse(rss_url)
+        finally:
+            socket.setdefaulttimeout(_old)
+        if not feed.entries:
+            return []
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        out = []
+        for e in feed.entries[:limit * 2]:
+            dt = _parse_published(e)
+            if dt and dt.timestamp() < cutoff:
+                continue
+            title = e.get("title", "").strip()
+            src = ""
+            if " - " in title:
+                parts = title.rsplit(" - ", 1)
+                title, src = parts[0].strip(), parts[1].strip()
+            out.append({"title": title, "source": src or "",
+                        "age": _format_age(dt), "link": e.get("link", "")})
+            if len(out) >= limit:
+                break
+        return out
+    except Exception as e:
+        print(f"[news_fetcher] 大盤新聞抓取失敗: {e}")
         return []
 
 

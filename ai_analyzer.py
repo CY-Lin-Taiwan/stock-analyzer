@@ -691,6 +691,250 @@ def audit_observation(data: dict, metrics: Optional[dict] = None,
     return issues
 
 
+def build_portfolio_prompt(market: Optional[dict], holdings: List[dict],
+                           income: Optional[dict],
+                           market_news: Optional[List[dict]] = None,
+                           chips: Optional[List[dict]] = None,
+                           correlation: Optional[dict] = None,
+                           rationale: str = "") -> str:
+    """
+    組合層級分析的 prompt。
+
+    刻意下重手限制範圍,否則輸出會變成人人適用的空話:
+      - 禁止逐檔複述(那是個股頁的工作)
+      - 禁止評價集中度好壞(配置是使用者的策略選擇)
+      - 禁止給買賣建議
+      - 必須指名道姓:哪幾檔值得單獨看、為什麼
+      - 必須回答一個只有組合層級才答得出來的問題:
+        現在的漲跌主要來自大盤(beta)還是個股因素(alpha)
+    """
+    mkt_txt = "(無大盤資料)"
+    if market:
+        bits = [f"{market.get('symbol')}:{market.get('regime_label')}"]
+        if market.get("k") is not None:
+            bits.append(f"KD {market['k']:.0f}/{market.get('d', 0):.0f}")
+        if market.get("cross") in ("golden", "death"):
+            bits.append(f"{market['cross_days_ago']} 天前"
+                        f"{'黃金' if market['cross'] == 'golden' else '死亡'}交叉")
+        if market.get("blunting") in ("high", "low"):
+            bits.append(f"{'高' if market['blunting'] == 'high' else '低'}檔鈍化")
+        mkt_txt = "、".join(bits)
+
+    lines = []
+    for h in holdings:
+        seg = (f"- {h['symbol']} {h.get('name','')}｜權重 {h.get('weight',0):.1f}%"
+               f"｜{h.get('industry','-')}｜市場狀態 {h.get('regime','—')}"
+               f"｜KD 位階 {h.get('zone','—')}｜未實現 {h.get('pnl_pct',0):+.1f}%")
+        # 以下是「使用者畫面上沒有並列顯示」的維度 —— 跨維度交集才有新資訊
+        # ⚠️ 不能只檢查 is not None —— NaN 會通過檢查,
+        #    送出去變成「PE 分位 nan%」,AI 只好當作沒提供。
+        def _ok(v):
+            try:
+                return v is not None and v == v      # NaN != NaN
+            except Exception:
+                return False
+        if _ok(h.get("pe_pct")):
+            seg += f"｜PE 分位 {h['pe_pct']:.0f}%"
+        if _ok(h.get("pb_pct")):
+            seg += f"｜PB 分位 {h['pb_pct']:.0f}%"
+        if _ok(h.get("div_share")):
+            seg += f"｜近 3 年報酬中配息佔 {h['div_share']:.0f}%"
+        lines.append(seg)
+    inc_txt = ""
+    if income and income.get("annual_income"):
+        inc_txt = (f"\n## 現金流\n預估年配息 {income['annual_income']:,} 元,"
+                   f"佔市值 {income.get('current_yield', 0):.2f}%")
+
+    # 籌碼:誰「現在正在買賣」。這是部位變化,比價格領先。
+    chips_txt = ""
+    if chips:
+        cl = []
+        for c in sorted(chips, key=lambda x: -x.get("weight", 0)):
+            cl.append(f"- {c['symbol']} {c.get('name','')}"
+                      f"(權重 {c['weight']:.0f}%):"
+                      f"外資 5 日 {c['foreign_5d']:+,.0f} 張、"
+                      f"投信 {c['trust_5d']:+,.0f} 張")
+        chips_txt = "\n## 法人近 5 日買賣超(張)\n" + "\n".join(cl)
+
+    # 相關性:唯一能「用資料檢驗分散是否為真」的輸入。
+    corr_txt = ""
+    if correlation:
+        c = correlation
+        lines_c = [f"- 主要持股加權平均相關性 {c.get('weighted_avg_corr')}"
+                   f"(全部配對平均 {c.get('avg_corr')},取近 {c.get('days_used')} 個交易日)"]
+        mc, lc = c.get("most_correlated"), c.get("least_correlated")
+        if mc:
+            lines_c.append(f"- 最高:{mc['a']} ↔ {mc['b']} = {mc['corr']}")
+        if lc:
+            lines_c.append(f"- 最低:{lc['a']} ↔ {lc['b']} = {lc['corr']}")
+        if c.get("note"):
+            lines_c.append(f"- {c['note']}")
+        corr_txt = ("\n## 持股報酬相關性(近一年日報酬)\n" + "\n".join(lines_c)
+                    + "\n(相關性 +1 = 完全同向,0 = 無關,-1 = 完全反向。"
+                      "這是**檢驗分散是否為真**的唯一客觀依據)")
+
+    # 使用者的配置邏輯:要被「檢驗」,不是被複述。
+    rat_txt = ""
+    if rationale and rationale.strip():
+        rat_txt = (f"\n## 使用者自述的配置邏輯\n{rationale.strip()}\n"
+                   f"⚠️ 這是使用者的**主張**,不是事實。你的任務是用上面的"
+                   f"相關性、權重、新聞、法人資料**檢驗它成不成立** —— "
+                   f"成立就說明依據,不成立就直接指出資料不支持。"
+                   f"**嚴禁只是換句話說重述一遍。**")
+
+    # 新聞:唯一帶有「市場預期與敘事」的輸入。
+    news_txt = ""
+    if market_news:
+        nl2 = [f"- [{n.get('source','')}·{n.get('age','')}] {n.get('title','')}"
+               for n in market_news]
+        news_txt = ("\n## 產業與市場近日新聞(標題)\n" + "\n".join(nl2)
+                    + "\n(這是**產業層級**的新聞,用來判斷環境;"
+                      "個股層級的新聞在個股頁面)")
+
+    nl = chr(10)
+    return f"""你是一位投資組合分析師。針對「整個組合」給出觀察 —— 不是逐檔分析。
+
+## 大盤環境
+{mkt_txt}
+
+## 持股現況({len(holdings)} 檔)
+{nl.join(lines)}
+{inc_txt}
+{corr_txt}
+{chips_txt}
+{news_txt}
+{rat_txt}
+
+# 嚴格限制(違反視為未完成)
+1. **禁止逐檔複述**。個股的基本面分析在別的頁面,這裡只做組合層級的觀察
+2. **禁止評價集中度好壞**。權重配置是使用者的策略選擇,你不知道他的理由。
+   可以描述「某檔佔 X% 使組合結果與它高度綁定」,但不可寫「應該分散」
+3. **禁止任何買賣、加碼、減碼建議**
+4. **必須指名道姓**。所有觀察都要指出是哪幾檔、數字是多少。
+   出現「部分持股」「某些標的」這類模糊說法視為未完成
+5. **禁止空泛結論**。像「應持續關注市場變化」「注意風險控管」這類
+   放諸四海皆準的句子一律不得出現
+
+# 你的分析單位是「賭注」,不是「個股」
+使用者已經有個股分析頁面。這裡若逐檔講,不但重複,還可能給出跟那邊
+不一致的解讀。**個股只能以「某個賭注的成員」身分出現,不能當成主角。**
+
+把持股歸納成 2~4 個**賭注(bet)** —— 一個賭注是「一個會決定成敗的
+共同驅動因子」,而不是產業分類。判斷方式:
+  - 問「什麼變數決定這一組持股的成敗」,那個變數就是賭注的名稱
+  - 兩檔屬於不同產業,但若由同一個變數驅動,那是**同一個賭注**
+  - 表面分散在多檔,若都由同一個景氣循環驅動,那就**只是一個賭注**
+
+# 組合層級才回答得了的問題(這是你存在的理由)
+1. 這個組合實際上在賭幾件事?各佔多少權重?
+2. 這些賭注**彼此獨立還是同源**?看起來分散、實際上是不是同一個押注?
+3. 整個組合對**哪一個變數**最敏感?那個變數動了會怎樣?
+4. 什麼情境會**同時**傷害多數持股?(組合的共同弱點)
+
+# 嚴格限制(違反視為未完成)
+1. **禁止以個股為主角**。「<代號> KD 偏弱」這種句子屬於個股頁面,
+   這裡不要。個股只能以賭注成員的身分出現,格式為
+   「<賭注名稱>(<代號>,<權重>%)」
+2. **禁止評價集中度好壞**。權重配置是使用者的策略選擇
+3. **禁止任何買賣、加碼、減碼建議**
+4. **禁止空泛結論**。「應持續關注市場變化」「注意風險控管」一律不得出現
+5. 所有敘述都要帶**權重數字**,因為組合層級唯一有意義的單位是權重
+
+# 關於「前瞻」
+價格、財報、位階全是**已發生**的。唯二帶前瞻性的是:
+  - **法人買賣超** = 誰現在正在建立或減少部位
+  - **產業新聞** = 市場當下的敘事與預期
+
+談未來只能建立在這兩者之上。**嚴禁**引入未經提供的宏觀敘事 ——
+「地緣政治風險需留意」「須關注美國升息」這類沒有對應輸入資料的句子
+一律不得出現。資料不足就在 limits 裡明說。
+
+# 禁止「套套邏輯」的風險陳述
+「全球經濟衰退會傷害所有部位」對**任何**組合都成立,等於什麼都沒說。
+風險只有在「**這個組合特有**」時才值得寫。
+
+正確的問法不是「什麼會傷害全部」,而是:
+  **在什麼情境下,使用者以為的分散會失效?**
+
+以下用抽象範例說明形式(A、B 代表這個組合實際持有的賭注,
+不是任何特定產業 —— 請依實際資料填入):
+
+  ✅ 形式一(用相關性推翻分散):
+     「A 與 B 看似兩個賭注,但相關性 +0.62 —— 過去一年幾乎同向,
+      分散是名目上的」
+  ✅ 形式二(指出兩個賭注在特定情境互相抵銷):
+     「使 A 受惠的那個變數,同時會壓抑 B 的需求 ——
+      兩者在該情境下互相抵銷而非互補」
+  ❌「全球經濟衰退會同時傷害兩者」(對所有組合都成立)
+  ❌「地緣政治風險需留意」(空話)
+
+若手上資料看不出組合特有的風險,就在 caveat 裡說明,不要硬湊。
+
+# 最重要的要求:先給一句結論
+`bottom_line` 是整份分析唯一會被記住的一句話。它必須是**結論**,不是摘要。
+
+判斷標準:讀完那一句,使用者應該知道「這個組合最關鍵的事實是什麼」。
+(以下用抽象形式表達,實際輸出要填入這個組合真正的賭注名稱)
+  ✅ 形式一:「你的 N 檔其實是同一個賭注 —— <驅動因子>,
+     上行同賺、下行同賠,沒有任何部位能對沖」
+  ✅ 形式二:「X% 押在循環高點的 <A>,另外 Y% 押在還沒落底的 <B>,
+     兩邊在賭相反的循環位置」
+  ❌「組合集中於 <甲類股> 與 <乙類股>」(這是描述,不是結論)
+  ❌「建議留意產業變化」(空話)
+
+若各賭注其實共用同一個驅動因子,**那就是結論本身**,必須寫在這一句裡。
+
+# 輸出 JSON
+{{
+  "bottom_line": "一句話結論,見上方要求。必須帶權重數字",
+  "bets": [
+    {{"theme": "賭注名稱(驅動因子,不是產業分類)",
+      "weight": "權重(數字,%)",
+      "members": "持股代號,逗號分隔",
+      "driver": "什麼變數決定成敗",
+      "status": "根據新聞、法人、技術狀態,現在處於什麼階段"}}
+  ],
+  "why": "為什麼上面那句結論成立 —— 把『表面分散實則同源』『最敏感的變數』『什麼情境會同時傷害多數持股』合併成一段連貫的說明,不要條列。必須帶權重數字",
+  "environment": "根據產業新聞與法人動向,當下環境對這個組合的意義。必須引用具體標題或買賣超數字。無新聞就寫『無新聞資料可判斷』",
+  "watch_next": ["組合層級要留意什麼,具體到變數或指標門檻,不要寫個股技術指標。最多 2 項"],
+  "hedge_check": "若使用者有自述配置邏輯:用相關性等資料檢驗它成不成立,直接說結論(成立/不成立/資料不足以判斷)並附數字。沒有自述邏輯就寫空字串",
+  "caveat": "這個判斷本身的弱點 —— 用一句話寫成『這個判斷建立在 X 之上,如果 Y 就不成立』的形式,不要列成清單"
+}}
+
+全部繁體中文。bets 2~4 項,權重合計應接近 100%。"""
+
+
+def run_portfolio_analysis(market: Optional[dict], holdings: List[dict],
+                           income: Optional[dict],
+                           market_news: Optional[List[dict]] = None,
+                           chips: Optional[List[dict]] = None,
+                           correlation: Optional[dict] = None,
+                           rationale: str = "",
+                           model_name: str = None) -> dict:
+    """執行組合層級分析"""
+    if model_name is None:
+        model_name = DEFAULT_MODEL
+    prompt = build_portfolio_prompt(market, holdings, income,
+                                    market_news=market_news, chips=chips,
+                                    correlation=correlation,
+                                    rationale=rationale)
+    try:
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(
+            prompt,
+            generation_config={"temperature": 0.3,
+                               "response_mime_type": "application/json"},
+            request_options={"timeout": API_TIMEOUT},
+        )
+        return {"success": True, "data": json.loads(response.text),
+                "model": model_name}
+    except Exception as e:
+        if any(k in str(e).lower() for k in ("timeout", "deadline", "504")):
+            return {"success": False, "data": None,
+                    "error": f"AI 逾時({API_TIMEOUT} 秒未回應),請稍後再試"}
+        return {"success": False, "data": None, "error": str(e)}
+
+
 def run_observation(
     symbol: str,
     name: str,

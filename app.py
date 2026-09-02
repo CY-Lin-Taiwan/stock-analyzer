@@ -7,7 +7,7 @@ Phase 2: 持股總覽 + 個股技術分析(K線/PE/月營收/季報) + 投資論
 # ==========================================
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import subprocess
 import sys
 import ai_analyzer
@@ -43,15 +43,32 @@ def authenticate_user():
       - URL ?user=alice 區分各自資料
       - 親友各自拿到專屬網址,進入後輸入密碼
     """
-    # 從 URL 抓取 user_id
-    user_id = st.query_params.get("user", "")
-    
-    # 沒帶 user 參數 → 拒絕
+    # 從 URL 抓取 user_id;抓不到時退回 session,再不行才請使用者輸入。
+    #
+    # 為什麼需要退路:查詢參數在手機上很容易掉 ——
+    #   1. Streamlit Cloud 休眠後點「get this app back up」,重新載入會掉參數
+    #   2. 加到主畫面的捷徑常常只存基底網址
+    #   3. 部分通訊軟體開連結時會截掉 ? 之後的部分
+    # 原本直接 st.stop(),使用者就完全進不去、也沒有任何補救方式。
+    user_id = st.query_params.get("user", "") or st.session_state.get("user_id", "")
+
     if not user_id:
         st.title("🔒 投資者專屬通道")
-        st.error("❌ 找不到使用者識別")
-        st.caption("請使用提供給你的專屬網址,格式: `https://your-app.com/?user=你的代號`")
+        st.caption("網址中的使用者識別遺失了(手機開啟時偶爾會發生)。"
+                   "直接輸入你的代號即可繼續。")
+        with st.form("user_id_form"):
+            typed = st.text_input("你的代號", placeholder="例如 me")
+            ok = st.form_submit_button("進入", width='stretch')
+        if ok and typed.strip():
+            # 寫回 URL,之後重新整理就不會再問
+            st.query_params["user"] = typed.strip()
+            st.session_state["user_id"] = typed.strip()
+            st.rerun()
         st.stop()
+
+    # 確保 URL 帶著參數,避免下次重整又掉
+    if st.query_params.get("user", "") != user_id:
+        st.query_params["user"] = user_id
     
     # 顯示名(可選,從 secrets 撈,沒設定就用 user_id)
     try:
@@ -213,22 +230,46 @@ def load_transactions(user_id: str = None):
 
 @st.cache_data(ttl=300)
 def load_latest_valuation(user_id: str = None):
-    """取每檔最新一筆股價+PE+PB+殖利率 (只看當前 user 的追蹤清單)"""
+    """
+    取每檔最新一筆股價+PE+PB+殖利率(只看當前 user 的追蹤清單)。
+
+    原本是「每檔各發一次查詢」—— 10 檔就是 10 次連續 HTTP 往返,
+    是總覽頁載入慢的主因之一。改成一次撈近 15 天的全部持股再取各檔最新,
+    N 次查詢變成 1 次。
+    """
     if user_id is None:
         user_id = get_user_id()
     stocks = supabase.table("stocks").select("symbol").eq("user_id", user_id).execute().data
     symbols = [s["symbol"] for s in stocks]
-    
+    if not symbols:
+        return {}
+
+    since = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
+    try:
+        rows = (supabase.table("daily_prices")
+                .select("symbol,date,close,pe,pb,dividend_yield")
+                .in_("symbol", symbols)
+                .gte("date", since)
+                .order("date", desc=True)
+                .execute().data) or []
+    except Exception as e:
+        print(f"[app] load_latest_valuation 批次查詢失敗,退回逐檔: {e}")
+        rows = []
+
     result = {}
+    for r in rows:                      # 已按日期新到舊,第一次遇到即為最新
+        result.setdefault(r["symbol"], r)
+
+    # 近 15 天沒資料的個股(例如已下市或長期停牌)才逐檔補撈
     for sym in symbols:
-        rows = supabase.table("daily_prices") \
-            .select("symbol,date,close,pe,pb,dividend_yield") \
-            .eq("symbol", sym) \
-            .order("date", desc=True) \
-            .limit(1) \
-            .execute().data
-        if rows:
-            result[sym] = rows[0]
+        if sym in result:
+            continue
+        got = (supabase.table("daily_prices")
+               .select("symbol,date,close,pe,pb,dividend_yield")
+               .eq("symbol", sym).order("date", desc=True)
+               .limit(1).execute().data)
+        if got:
+            result[sym] = got[0]
     return result
 
 @st.cache_data(ttl=300)
@@ -374,6 +415,8 @@ def load_market_context():
     except Exception as e:
         print(f"[app] 大盤基準計算失敗: {e}")
         return None
+    # 註:若回傳 None,大盤對照會整個不做。呼叫端要讓這件事看得見,
+    #     不能靜默跳過 —— 使用者只會覺得「怎麼都沒出現降級提示」。
 
 
 def db_retry(fn, tries=3, delay=0.4, label=""):
@@ -651,16 +694,101 @@ def render_sticky_stock_header(label: str, latest, change: float, change_pct: fl
 # ============================================================
 # 頁面 1: 持股總覽
 # ============================================================
+@st.cache_data(ttl=300)
+def _portfolio_states(symbols: tuple, meta: dict):
+    """
+    逐檔計算市場狀態與 KD 位階(組合現況用)。
+
+    抽成快取函式的原因:每檔都要算布林通道、KD 遞歸序列、252 日帶寬百分位,
+    對 10 檔持股是不小的運算量。沒有快取的話,任何一次頁面重整
+    (連按個按鈕都算)都會全部重跑一遍。
+
+    Returns: (rows, states, zones, fail_count)
+    """
+    rows, states, zones, fail = [], {}, {}, 0
+    for sym in symbols:
+        m = meta.get(sym, {})
+        try:
+            df_adj, _ = load_adjusted_prices(sym)
+            if df_adj.empty or len(df_adj) < 30:
+                fail += 1
+                continue
+            bb = metrics.calculate_bollinger_bands(df_adj["close"])
+            rg = metrics.get_regime(
+                bb, metrics.calculate_bandwidth_percentile(df_adj["close"]))
+            kd = metrics.calculate_kd(df_adj)
+            zl = metrics.get_kd_grade(kd)["zone_label"] if kd else "—"
+            states.setdefault(rg["label"], []).append(sym)
+            if kd:
+                zones.setdefault(zl, []).append(sym)
+
+            div_share = None
+            try:
+                raw = pd.DataFrame(load_prices(sym))
+                if not raw.empty:
+                    raw["date"] = pd.to_datetime(raw["date"])
+                    raw = raw.sort_values("date").reset_index(drop=True)
+                    tr = metrics.calculate_total_return(
+                        df_adj["close"], raw["close"], years=3)
+                    if tr:
+                        div_share = tr.get("dividend_share_of_total")
+            except Exception:
+                pass
+
+            cs = metrics.combine_state(rg["label"], zl)
+            rows.append({"symbol": sym, "regime": rg["label"], "zone": zl,
+                         "state": cs["label"], "state_icon": cs["icon"],
+                         "state_meaning": cs["meaning"],
+                         "div_share": div_share, **m})
+        except Exception as e:
+            print(f"[app] 組合狀態計算失敗 {sym}: {e}")
+            fail += 1
+    return rows, states, zones, fail
+
+
+def audit_holdings_data(holdings):
+    """
+    持股資料品質檢查。
+
+    為什麼需要:成本填錯不會報錯,只會讓有效成本、YoC、報酬率悄悄失真 ——
+    而工具是分享出去的,親友不會知道「券商庫存頁的平均成本已扣過息」
+    這種眉角。已知案例:某筆登錄價高於當日最高成交價、某筆日期填在元旦
+    (休市日)。發現當下修比事後考古容易得多。
+
+    Returns: [{"symbol","issue","detail"}, ...]
+    """
+    issues = []
+    try:
+        txns = load_transactions(get_user_id())
+    except Exception as e:
+        print(f"[app] 資料檢查失敗: {e}")
+        return issues
+
+    for t in txns:
+        sym = t.get("symbol")
+        if not sym:
+            continue
+        try:
+            px = float(t.get("price") or 0)
+            ds = str(t.get("date"))[:10]
+        except (TypeError, ValueError):
+            continue
+        if px <= 0:
+            issues.append({"symbol": sym, "issue": "價格為 0 或空白",
+                           "detail": f"{ds} 的登錄價 {px}"})
+            continue
+        lv, msg = validate_txn_price(sym, ds, px)
+        if lv == "error":
+            issues.append({"symbol": sym, "issue": "登錄價與當日成交區間不符",
+                           "detail": msg})
+        elif lv == "warn" and "非交易日" in msg:
+            issues.append({"symbol": sym, "issue": "日期非交易日",
+                           "detail": msg})
+    return issues
+
+
 def page_portfolio_overview():
     st.title("📊 投資組合總覽")
-    
-    with st.expander("ℹ️ PE 是什麼?怎麼看?"):
-        st.markdown("""
-        **PE (本益比) = 股價 ÷ 每股盈餘 (EPS)**
-        直觀理解:**用現在股價買,假設每年賺一樣多,要幾年才回本**。
-        - **百分位** 比絕對值更有用:目前 PE 在過去 3 年的什麼位置
-            - 0~30%:相對便宜 🟢 | 30~70%:中間 🟡 | 70~100%:相對昂貴 🔴
-        """)
     
     holdings = calc_holdings()
     if holdings.empty:
@@ -781,14 +909,269 @@ def page_portfolio_overview():
         f"成本殖利率: {portfolio_cost_yield:.2f}%"
     )
     
-    # 累積已領股息資訊條 (永遠顯示,讓使用者知道「實際領了多少」)
+    # 累積已領股息:併進 KPI 下方的一行說明,不再用整條 info 橫幅搶版面
     if total_accumulated_dividend > 0:
-        st.info(
-            f"💵 **累積已領股息: NT$ {total_accumulated_dividend:,.0f} 元** "
-            f"({total_accumulated_dividend/10000:.2f} 萬) "
-            f"｜ 從買進日起算,對齊各次除息日當下持股計算"
+        st.caption(
+            f"💵 累積已領股息 **NT$ {total_accumulated_dividend:,.0f}** "
+            f"({total_accumulated_dividend/10000:.2f} 萬)"
+            f"　·　從買進日起算,對齊各次除息日當下持股計算"
         )
-    
+
+    st.divider()
+
+    # === 組合現況 ===
+    # 只放「組合層級才看得到」的東西:大盤環境、我的持股相對它在哪。
+    # 刻意不評分 —— 集中或分散、配息多寡都取決於使用者的策略,
+    # 50% 押一檔可能是深思熟慮的配置,工具不該預設分散才是對的。
+    st.markdown("### 🩺 組合現況")
+
+    _mkt = load_market_context()
+
+    # 逐檔算市場狀態與 KD 位階(含快取)。
+    # 這段要對每檔算布林、KD 序列、252 日帶寬百分位 —— 沒有快取的話
+    # 每次頁面重整都重跑一遍,是總覽頁變慢的主因。
+    _rows_state, _states, _zones, _fail = _portfolio_states(
+        tuple(holdings["symbol"]),
+        {r["symbol"]: {
+            "name": r.get("name", r["symbol"]),
+            "weight": float(r["market_value"]) / total_value * 100 if total_value else 0,
+            "industry": r.get("industry", "-"),
+            "pnl_pct": float(r.get("pnl_pct", 0) or 0),
+            "pe_pct": None if pd.isna(r.get("pe_percentile")) else r.get("pe_percentile"),
+            "pb_pct": None if pd.isna(r.get("pb_percentile")) else r.get("pb_percentile"),
+        } for _, r in holdings.iterrows()},
+    )
+    if _rows_state:
+        _n = len(_rows_state)
+        _wt = {r["symbol"]: r["weight"] for r in _rows_state}
+        _name_of = {r["symbol"]: r["name"] for r in _rows_state}
+
+        # --- 三個數字先講結論 ---
+        # 用「權重」不是「檔數」:一檔佔 2% 和一檔佔 50% 影響差 25 倍。
+        _same_w = _same_n = 0
+        if _mkt and _mkt.get("regime_label") in _states:
+            _syms = _states[_mkt["regime_label"]]
+            _same_n = len(_syms)
+            _same_w = sum(_wt.get(x, 0) for x in _syms)
+        _drv = ("大盤主導" if _same_w >= 60
+                else "個股主導" if _same_w <= 40 else "各半")
+
+        k1, k2, k3 = st.columns(3)
+        k1.metric("大盤狀態",
+                  _mkt.get("regime_label", "—") if _mkt else "無資料",
+                  f"KD {_mkt['k']:.0f}" if _mkt and _mkt.get("k") is not None else None)
+        k2.metric("與大盤同步", f"{_same_w:.0f}%",
+                  f"{_same_n}/{_n} 檔",
+                  help="按市值權重計算,不是按檔數 —— "
+                       "一檔佔 2% 和一檔佔 50% 對組合的影響差很多")
+        k3.metric("漲跌主要來自", _drv,
+                  help="同步權重 ≥60% 為大盤主導(beta),≤40% 為個股主導(alpha)")
+
+        # --- 持股狀態:把中期趨勢與短期位階「合成」後呈現 ---
+        # 分開列會看起來互相矛盾(「上升趨勢 67%」但「KD 偏弱 94%」),
+        # 實際上那是兩個不同時間尺度:
+        #   市場狀態 = 20 日均線方向(中期,數週)
+        #   KD 位階  = 現價在最近 9 天區間的位置(短期,數日)
+        # 「上升趨勢 + KD 偏弱」= 中期向上、短線回檔,是多頭裡的常態。
+        # 合成之後才看得出「現在是什麼情況」,而不是兩個打架的標籤。
+        _combined = {}
+        for _r3 in _rows_state:
+            _combined.setdefault(
+                (_r3["state"], _r3["state_icon"], _r3["state_meaning"]), []
+            ).append(_r3["symbol"])
+
+        # 一個主題一個容器 —— 先前每一項都加框,結果看不出哪些是一組的。
+        # 這裡是兩個主題:「合成判讀」與「構成它的兩個維度」。
+        with st.container(border=True):
+            st.markdown("**持股狀態**　:gray[中期趨勢與短期位階的綜合判讀]")
+            for _idx, ((_lb, _ic, _mn), _v) in enumerate(sorted(
+                    _combined.items(),
+                    key=lambda x: -sum(_wt.get(i, 0) for i in x[1]))):
+                if _idx:
+                    st.markdown("")
+                _w = sum(_wt.get(i, 0) for i in _v)
+                _who = "、".join(f"{x} {_name_of.get(x,'')}" for x in _v)
+                st.markdown(f"{_ic} **{_lb}**　`權重 {_w:.0f}%`　"
+                            f"{len(_v)} 檔　{_who}")
+                st.caption(f"　{_mn}")
+
+        _TREND_GLOSS = {
+            "上升趨勢": "20 日均線走揚", "下降趨勢": "20 日均線下彎",
+            "區間震盪": "均線走平,價格來回", "帶寬收縮": "波動壓縮到一年低檔"}
+        _KD_GLOSS = {"超賣區": "K < 20", "偏弱區": "K 20~50",
+                     "偏強區": "K 50~80", "超買區": "K > 80"}
+
+        with st.container(border=True):
+            st.markdown("**拆解**　:gray[上面的狀態是由這兩個維度合成的]")
+            _d1, _d2 = st.columns(2)
+
+            def _dim(col, title, sub, groups, gloss):
+                with col:
+                    st.markdown(f"**{title}**　:gray[{sub}]")
+                    for _k, _v in sorted(
+                            groups.items(),
+                            key=lambda x: -sum(_wt.get(i, 0) for i in x[1])):
+                        _w = sum(_wt.get(i, 0) for i in _v)
+                        st.markdown(f"　{_k}　`{_w:.0f}%`　"
+                                    f":gray[{gloss.get(_k,'')}]")
+                        st.caption("　　" + "、".join(
+                            _name_of.get(x, x) for x in _v))
+
+            _dim(_d1, "中期趨勢", "20 日均線的方向", _states, _TREND_GLOSS)
+            _dim(_d2, "短期位階", "現價在近 9 日區間的位置", _zones, _KD_GLOSS)
+
+        if _fail:
+            st.caption(f"({_fail} 檔資料不足,未納入統計)")
+
+        # --- AI 組合觀察 ---
+        _divmap = {}
+        for _, _r in holdings.iterrows():
+            _md = _r.get("manual_dividend", 0)
+            _divmap[_r["symbol"]] = (_md if pd.notna(_md) and _md > 0
+                                     else get_latest_dividend(_r["symbol"]))
+        _inc = metrics.analyze_income(holdings, _divmap)
+
+        # 讓使用者說明配置邏輯 —— AI 的任務是「檢驗」它,不是複述。
+        # 配置意圖不在任何資料裡,但它是可以用相關性驗證的主張。
+        # ⚠️ placeholder 要保持中性:工具是分享給多人用的,
+        #    寫上某個人的實際策略會錨定其他使用者。
+        _rationale = st.text_input(
+            "你的配置邏輯(選填)", key="portfolio_rationale",
+            placeholder="例如:某一類持股是用來對沖另一類的風險",
+            help="AI 會用相關性、權重、新聞等資料**檢驗**這個說法成不成立,"
+                 "而不是照著複述。留白也可以。")
+
+        if st.button("🤖 AI 組合觀察", key="btn_portfolio_ai"):
+            with st.spinner("讀取市場氛圍與籌碼動向..."):
+                # 前瞻資料只有兩種:新聞(市場預期)與法人買賣超(部位變化)。
+                # 新聞改用「持股名稱」查,不用「台股 大盤」這種泛用詞 ——
+                # 泛用詞常常在白名單媒體裡查不到東西。
+                _top = sorted(_rows_state, key=lambda x: -x["weight"])[:4]
+                # 先查「產業」再退回「個股」——
+                # 組合分析要看的是環境,不是個股(個股新聞在個股頁已經有了)。
+                # 產業新聞才回答「為什麼這幾檔一起動」。
+                _news_kw, _news_src = [], ""
+                try:
+                    _mnews = news_fetcher.fetch_industry_news(
+                        [t.get("industry", "") for t in _top], days=3, limit=10)
+                    _news_kw = (_mnews[0].get("_keywords", [])
+                                if _mnews else [])
+                    if _mnews and _mnews[0].get("_empty"):
+                        _mnews = []
+                    if _mnews:
+                        _news_src = "產業"
+                    else:
+                        _mnews = news_fetcher.fetch_portfolio_news(
+                            [t["name"] for t in _top], days=3, limit=10)
+                        if _mnews:
+                            _news_src = "個股"
+                except Exception as e:
+                    print(f"[app] 組合新聞失敗: {e}")
+                    _mnews = []
+                st.session_state["portfolio_news_kw"] = (_news_kw, _news_src,
+                                                         len(_mnews))
+
+                _chips = []
+                for _r2 in _rows_state:
+                    try:
+                        _cf = load_chips(_r2["symbol"], days=10)
+                        if _cf.empty:
+                            continue
+                        _r5 = _cf.tail(5)
+                        _chips.append({
+                            "symbol": _r2["symbol"], "name": _r2["name"],
+                            "weight": _r2["weight"],
+                            "foreign_5d": float(_r5["foreign_net"].sum()) / 1000,
+                            "trust_5d": float(_r5["trust_net"].sum()) / 1000,
+                        })
+                    except Exception:
+                        pass
+
+                # 相關性:唯一能用資料檢驗「分散是不是真的」的依據
+                _corr = None
+                try:
+                    _pmap = {}
+                    for _r3 in _rows_state:
+                        _dd, _ = load_adjusted_prices(_r3["symbol"])
+                        if not _dd.empty:
+                            _pmap[_r3["symbol"]] = _dd["close"]
+                    _corr = metrics.analyze_correlation(
+                        _pmap, {r["symbol"]: r["weight"] for r in _rows_state})
+                except Exception as e:
+                    print(f"[app] 相關性計算失敗: {e}")
+
+                _pr = ai_analyzer.run_portfolio_analysis(
+                    _mkt, _rows_state, _inc,
+                    market_news=_mnews, chips=_chips,
+                    correlation=_corr, rationale=_rationale)
+                st.session_state["portfolio_corr"] = _corr
+            st.session_state["portfolio_ai"] = _pr
+
+        _pa = st.session_state.get("portfolio_ai")
+        if _pa:
+            if not _pa.get("success"):
+                st.error(f"❌ {_pa.get('error')}")
+            else:
+                _pd_ = _pa["data"]
+
+                # 結論優先。先前把六件事拆成六個等重的框,
+                # 結果沒有任何一句落地 —— 讀者得自己拼故事。
+                if _pd_.get("bottom_line"):
+                    st.success(f"**{_pd_['bottom_line']}**")
+
+                if _pd_.get("why"):
+                    st.markdown(_pd_["why"])
+
+                if _pd_.get("hedge_check"):
+                    st.markdown(f"🔍 **檢驗你的配置邏輯**　{_pd_['hedge_check']}")
+                _cr = st.session_state.get("portfolio_corr")
+                if _cr:
+                    st.caption(
+                        f"　持股相關性:加權平均 {_cr.get('weighted_avg_corr')}"
+                        f"(+1 完全同向 / 0 無關 / −1 完全反向)"
+                        f"　最高 {_cr['most_correlated']['a']}↔"
+                        f"{_cr['most_correlated']['b']} "
+                        f"{_cr['most_correlated']['corr']}"
+                        f"　最低 {_cr['least_correlated']['a']}↔"
+                        f"{_cr['least_correlated']['b']} "
+                        f"{_cr['least_correlated']['corr']}")
+
+                _bets = _pd_.get("bets") or []
+                if _bets:
+                    with st.container(border=True):
+                        st.markdown("**拆解:這些賭注由誰組成**")
+                        for _b in _bets:
+                            _bw = str(_b.get("weight", "")).replace("%", "")
+                            try:
+                                _bw = f"{float(_bw):.0f}%"
+                            except (TypeError, ValueError):
+                                _bw = str(_b.get("weight", "—"))
+                            st.markdown(f"**{_b.get('theme','—')}**　`{_bw}`　"
+                                        f":gray[{_b.get('members','')}]")
+                            st.caption(f"　驅動因子:{_b.get('driver','')}")
+                            st.caption(f"　目前:{_b.get('status','')}")
+
+                if _pd_.get("environment"):
+                    st.markdown(f"🌡️ **環境**　{_pd_['environment']}")
+                _kw, _src, _cnt = st.session_state.get(
+                    "portfolio_news_kw", ([], "", 0))
+                if _cnt:
+                    st.caption(f"　新聞:{_src}層級,關鍵字「"
+                               f"{'、'.join(_kw) if _kw else '個股名稱'}」,{_cnt} 則")
+                elif _kw:
+                    st.caption(f"　⚠️ 用關鍵字「{'、'.join(_kw)}」查不到新聞 —— "
+                               f"這些字取自「交易管理 → 追蹤清單」的產業欄位,"
+                               f"改成新聞常用的說法會更容易查到。")
+
+                if _pd_.get("watch_next"):
+                    st.markdown("**接下來留意**　"
+                                + "　·　".join(_pd_["watch_next"]))
+
+                # 判斷的弱點要跟結論放在一起,不是走完全程才在最下面
+                # 用灰色小字補一句「其實我看不到這些」。
+                if _pd_.get("caveat"):
+                    st.info(f"⚖️ {_pd_['caveat']}")
+
     st.divider()
     
    # === 持股明細 ===
@@ -1270,6 +1653,11 @@ def page_stock_detail():
         # 「還原股價 vs 原始股價」的完整說明放在 K 線圖下方(那裡才看得到差異),
         # 這裡只報狀態,不重複解釋。
         st.caption(f"🔄 {price_adjust.summarize(adj_report)}")
+        if (load_market_context() is None
+                and selected_symbol != metrics.MARKET_BENCHMARK):
+            st.caption(f"⚠️ 缺少大盤基準 {metrics.MARKET_BENCHMARK} 的資料,"
+                       f"無法判斷技術訊號是個股特性還是全市場走勢。"
+                       f"請執行資料同步。")
         for _w in adj_report.get("warnings", []):
             st.warning(f"⚠️ {_w}")
 
@@ -1997,7 +2385,7 @@ def page_stock_detail():
         upcoming_events = st.text_area(
             "📢 補充最新重大事件 (這會強制 AI 優先閱讀)", 
             value=st.session_state[memory_key],
-            placeholder="例如: 2603 董事會已決議配息 16 元 / 6862 發行 10 億元 CB 且主力詢圈中...",
+            placeholder="例如: 董事會已決議配息 X 元 / 發行 CB 且主力詢圈中 / 法說會將於 X 月舉行...",
             key=f"ai_event_input_{selected_symbol}",
             height=100,
             on_change=sync_event_memory,
@@ -2965,7 +3353,14 @@ def page_transactions():
             with col_s2:
                 new_name = st.text_input("名稱 *", placeholder="例如 鴻海", key="new_name_in_txn")
             with col_s3:
-                new_industry = st.text_input("產業(選填)", placeholder="例如 電子代工", key="new_ind_in_txn")
+                new_industry = st.text_input(
+                    "產業(選填)", placeholder="例如 航運、半導體",
+                    key="new_ind_in_txn",
+                    help=("這個欄位也用於組合分析的**產業新聞查詢**,"
+                          "所以填新聞裡常見的說法會比較有用。\n\n"
+                          "✅ 航運、半導體、金融股、被動元件\n"
+                          "⚠️ 電子IC導線架、被動元件MLCC —— 太細碎,"
+                          "新聞標題幾乎不會出現這些字"))
             st.caption("⏳ 儲存後會自動跑 FinMind 同步近 3 年資料(約 30 秒)")
         else:
             stock_options = {f"{s['symbol']} {s['name']}": s['symbol'] for s in stocks}
@@ -3102,7 +3497,24 @@ def page_transactions():
     # ============================================
     with tab2:
         st.subheader("所有交易紀錄")
-        
+
+        # 資料品質檢查放在這裡,不放總覽儀表板 ——
+        # 那裡看到只能乾著急,這裡才改得動。
+        # 而且很多「異常」其實是使用者刻意的登錄慣例(例如填券商已扣息的
+        # 平均成本 + 快照日期),每次開總覽都提醒一次已經決定過的事,
+        # 那叫嘮叨不叫防呆。所以收在摺疊區塊,想查才展開。
+        with st.expander("🔍 檢查登錄價格是否合理"):
+            _dq = audit_holdings_data(None)
+            if not _dq:
+                st.success("✅ 所有交易紀錄的價格與日期都落在當日成交區間內")
+            else:
+                st.caption(f"以下 {len(_dq)} 筆的登錄價與當日實際成交區間不符。"
+                           f"若這是你刻意的登錄方式(例如填券商顯示的平均成本、"
+                           f"或日期為概估),可以忽略 —— 但要知道有效成本與 YoC "
+                           f"會因此偏移。")
+                for _x in _dq:
+                    st.markdown(f"- **{_x['symbol']}**　{_x['detail']}")
+
         txns = supabase.table("transactions").select("*").eq("user_id", get_user_id()).order("date", desc=True).execute().data
         
         if not txns:

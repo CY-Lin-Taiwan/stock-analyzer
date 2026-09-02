@@ -2142,3 +2142,281 @@ def calculate_kd_series(
     except Exception as e:
         print(f"[metrics] KD 序列繪圖資料失敗: {e}")
         return None
+
+
+# =============================================================
+# 組合健檢
+# =============================================================
+# 這些是「只有在組合層級才看得到」的東西 —— 個股頁面上永遠看不出來。
+# 對「只進不出」的策略尤其重要:賣出這個調節閥被拿掉之後,
+# 唯一能控制風險的就是新資金流向,而要做那個決定得先看得到權重分布。
+CONC_TOP1_WARN = 30.0      # 單一持股佔比超過此值 → 提醒
+CONC_TOP1_ALERT = 40.0
+CONC_TOP3_WARN = 60.0
+
+
+def analyze_concentration(holdings: pd.DataFrame) -> Optional[Dict]:
+    """
+    集中度分析。
+
+    Args:
+        holdings: 需含 symbol / name / market_value(或 shares × current_price)
+
+    Returns:
+        {"total", "rows", "top1", "top3", "hhi", "effective_n", "level", "message"}
+    """
+    if holdings is None or holdings.empty:
+        return None
+    df = holdings.copy()
+    if "market_value" not in df.columns:
+        if {"shares", "current_price"}.issubset(df.columns):
+            df["market_value"] = df["shares"] * df["current_price"]
+        else:
+            return None
+    df = df[df["market_value"] > 0]
+    if df.empty:
+        return None
+
+    total = float(df["market_value"].sum())
+    df["weight"] = df["market_value"] / total * 100
+    df = df.sort_values("weight", ascending=False)
+
+    top1 = float(df.iloc[0]["weight"])
+    top3 = float(df.head(3)["weight"].sum())
+    # HHI:權重平方和。倒數 = 「有效持股檔數」——
+    # 比「檔數」誠實得多:持有 20 檔但一檔佔 60%,有效檔數其實不到 3。
+    hhi = float((df["weight"] / 100).pow(2).sum())
+    eff_n = 1 / hhi if hhi > 0 else 0
+
+    # 訊息只描述事實,不預設使用者採取哪種策略 ——
+    # 「該不該調整」取決於使用者的框架,工具不該替他決定。
+    if top1 >= CONC_TOP1_ALERT:
+        level = "alert"
+        msg = (f"最大持股佔 {top1:.0f}%,單一標的的成敗會主導整個組合的結果。"
+               f"有效持股檔數 {eff_n:.1f} 檔(實際 {len(df)} 檔)。")
+    elif top1 >= CONC_TOP1_WARN or top3 >= CONC_TOP3_WARN:
+        level = "warn"
+        msg = (f"最大持股 {top1:.0f}%、前三大合計 {top3:.0f}%,集中度偏高。"
+               f"有效持股檔數僅 {eff_n:.1f} 檔(實際 {len(df)} 檔)。")
+    else:
+        level = "ok"
+        msg = (f"最大持股 {top1:.0f}%、前三大 {top3:.0f}%,分散度尚可。"
+               f"有效持股檔數 {eff_n:.1f} 檔。")
+
+    return {
+        "total": round(total),
+        "rows": df[["symbol", "market_value", "weight"]
+                   + (["name"] if "name" in df.columns else [])].to_dict("records"),
+        "top1": round(top1, 1), "top3": round(top3, 1),
+        "hhi": round(hhi, 4), "effective_n": round(eff_n, 1),
+        "count": len(df), "level": level, "message": msg,
+    }
+
+
+def analyze_income(holdings: pd.DataFrame,
+                   dividend_map: Dict[str, float]) -> Optional[Dict]:
+    """
+    配息現金流 —— 「領息為主」策略真正的成績單。
+
+    Args:
+        holdings: 需含 symbol / shares / total_cost / market_value
+        dividend_map: {symbol: 年配息(元/股)}
+
+    Returns:
+        {"annual_income", "total_cost", "market_value",
+         "yoc", "current_yield", "rows", "covered_pct"}
+    """
+    if holdings is None or holdings.empty or not dividend_map:
+        return None
+    df = holdings.copy()
+    if "market_value" not in df.columns and {"shares", "current_price"}.issubset(df.columns):
+        df["market_value"] = df["shares"] * df["current_price"]
+
+    rows, income = [], 0.0
+    covered = 0
+    for _, r in df.iterrows():
+        d = float(dividend_map.get(r["symbol"], 0) or 0)
+        sh = float(r.get("shares", 0) or 0)
+        amt = d * sh
+        income += amt
+        if d > 0:
+            covered += 1
+        rows.append({
+            "symbol": r["symbol"],
+            "name": r.get("name", r["symbol"]),
+            "dividend_per_share": d,
+            "annual_income": round(amt),
+            "yoc": (round(d / float(r["avg_cost"]) * 100, 2)
+                    if r.get("avg_cost") else None),
+        })
+
+    cost = float(df["total_cost"].sum()) if "total_cost" in df.columns else 0
+    mv = float(df["market_value"].sum()) if "market_value" in df.columns else 0
+    rows.sort(key=lambda x: x["annual_income"], reverse=True)
+
+    return {
+        "annual_income": round(income),
+        "monthly_avg": round(income / 12),
+        "total_cost": round(cost),
+        "market_value": round(mv),
+        # YoC 用「當初投入的成本」當分母 —— 這才是你實際投入的錢
+        "yoc": round(income / cost * 100, 2) if cost else None,
+        # 現時殖利率用市值 —— 回答「現在這筆錢擺著能生多少」
+        "current_yield": round(income / mv * 100, 2) if mv else None,
+        "rows": rows,
+        "covered": covered,
+        "count": len(df),
+    }
+
+
+def combine_state(regime_label: str, zone_label: str) -> Dict:
+    """
+    把「市場狀態」與「KD 位階」合成一個可讀的狀態。
+
+    為什麼要合成:兩者測的是不同時間尺度 ——
+      市場狀態 = 20 日均線的方向(中期,數週)
+      KD 位階  = 現價在最近 9 天區間的位置(短期,數日)
+    分開列出時會看起來互相矛盾(「上升趨勢」但「KD 偏弱」),
+    實際上那是最常見也最有意義的組合之一:中期向上、短線剛回檔。
+    合成之後才看得出「現在是什麼情況」,而不是兩個打架的標籤。
+
+    Returns: {"label", "meaning", "icon"}
+    """
+    up = regime_label == "上升趨勢"
+    down = regime_label == "下降趨勢"
+    rng = regime_label == "區間震盪"
+    sq = regime_label == "帶寬收縮"
+    weak = zone_label in ("超賣區", "偏弱區")
+    strong = zone_label in ("偏強區", "超買區")
+    extreme_low = zone_label == "超賣區"
+    extreme_high = zone_label == "超買區"
+
+    if sq:
+        return {"label": "方向未明", "icon": "🟡",
+                "meaning": "波動壓縮,中短期都測不出方向,常是變盤前夕"}
+    if up and extreme_high:
+        return {"label": "趨勢加速", "icon": "🔥",
+                "meaning": "中期向上且短線過熱,可能鈍化延續,但追高風險高"}
+    if up and strong:
+        return {"label": "趨勢延續", "icon": "🟢",
+                "meaning": "中期與短期同向,走勢健康"}
+    if up and weak:
+        return {"label": "趨勢中回檔", "icon": "🔵",
+                "meaning": ("中期仍向上,只是短線拉回 —— "
+                            "這在多頭裡是常態,不代表趨勢轉弱")}
+    if down and extreme_low:
+        return {"label": "跌深", "icon": "🔴",
+                "meaning": "中期向下且短線超賣,反彈也多屬技術性"}
+    if down and weak:
+        return {"label": "跌勢延續", "icon": "🔴",
+                "meaning": "中期與短期同向向下"}
+    if down and strong:
+        return {"label": "跌勢中反彈", "icon": "🟠",
+                "meaning": "中期仍向下,短線反彈 —— 反彈訊號在下降趨勢中容易失效"}
+    if rng and extreme_low:
+        return {"label": "區間下緣", "icon": "🔵",
+                "meaning": "箱型整理的低點附近,是 KD 反轉訊號較可靠的位置"}
+    if rng and extreme_high:
+        return {"label": "區間上緣", "icon": "🟠",
+                "meaning": "箱型整理的高點附近,是 KD 反轉訊號較可靠的位置"}
+    if rng:
+        return {"label": "區間中段", "icon": "⚪",
+                "meaning": "箱型整理的中間,沒有明確位階訊號"}
+    return {"label": f"{regime_label}·{zone_label}", "icon": "⚪", "meaning": ""}
+
+
+# =============================================================
+# 持股相關性
+# =============================================================
+CORR_MIN_DAYS = 120        # 少於這麼多重疊交易日不給結果
+
+
+def analyze_correlation(price_map: Dict[str, pd.Series],
+                        weights: Optional[Dict[str, float]] = None,
+                        days: int = 250) -> Optional[Dict]:
+    """
+    持股之間的報酬相關性 —— 用來檢驗「分散」是不是真的。
+
+    為什麼這是組合層級才做得到的事:
+      使用者可能認為某檔是另一檔的對沖(例如「用航運對沖電子/AI 風險」),
+      但那是策略意圖,不是事實。相關性可以直接驗證 ——
+      若兩者報酬相關性是 +0.6,那個對沖根本不存在。
+      個股頁面永遠算不出這個數字。
+
+    Args:
+        price_map: {symbol: 還原收盤價 Series}
+        weights:   {symbol: 權重%},有給就一併算加權平均相關性
+        days:      取最近幾個交易日
+
+    Returns:
+        {"pairs": [...], "avg_corr", "weighted_avg_corr",
+         "most_correlated", "least_correlated", "n_symbols", "note"}
+    """
+    if not price_map or len(price_map) < 2:
+        return None
+    try:
+        rets = {}
+        for sym, ser in price_map.items():
+            if ser is None or len(ser) < CORR_MIN_DAYS:
+                continue
+            r = pd.Series(ser).tail(days).pct_change().dropna()
+            if len(r) >= CORR_MIN_DAYS:
+                rets[sym] = r.reset_index(drop=True)
+        if len(rets) < 2:
+            return None
+
+        df = pd.DataFrame(rets).dropna()
+        if len(df) < CORR_MIN_DAYS:
+            return None
+        cm = df.corr()
+
+        pairs = []
+        syms = list(cm.columns)
+        for i in range(len(syms)):
+            for j in range(i + 1, len(syms)):
+                a, b = syms[i], syms[j]
+                c = float(cm.loc[a, b])
+                w = None
+                if weights:
+                    w = (weights.get(a, 0) + weights.get(b, 0)) / 100
+                pairs.append({"a": a, "b": b, "corr": round(c, 2),
+                              "pair_weight": round(w * 100, 1) if w else None})
+        if not pairs:
+            return None
+
+        pairs.sort(key=lambda x: -x["corr"])
+        avg = sum(p["corr"] for p in pairs) / len(pairs)
+
+        # 加權平均:用兩檔權重的乘積當權數 ——
+        # 兩檔都很小的配對就算高度相關,對組合也沒什麼影響。
+        wavg = None
+        if weights:
+            num = den = 0.0
+            for p in pairs:
+                w = (weights.get(p["a"], 0) / 100) * (weights.get(p["b"], 0) / 100)
+                num += p["corr"] * w
+                den += w
+            wavg = round(num / den, 2) if den else None
+
+        if wavg is not None and wavg >= 0.5:
+            note = "以權重計算,主要持股之間高度同向 —— 分散效果有限"
+        elif wavg is not None and wavg >= 0.2:
+            note = "以權重計算,主要持股中度同向"
+        elif wavg is not None:
+            note = "以權重計算,主要持股之間關聯較低 —— 有實質分散效果"
+        else:
+            note = ""
+
+        return {
+            "pairs": pairs,
+            "avg_corr": round(avg, 2),
+            "weighted_avg_corr": wavg,
+            "most_correlated": pairs[0],
+            "least_correlated": pairs[-1],
+            "n_symbols": len(syms),
+            "days_used": len(df),
+            "note": note,
+        }
+    except Exception as e:
+        print(f"[metrics] 相關性計算失敗: {e}")
+        return None

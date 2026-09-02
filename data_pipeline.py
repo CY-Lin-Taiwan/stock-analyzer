@@ -24,6 +24,13 @@ finmind.login_by_token(api_token=os.getenv("FINMIND_TOKEN"))
 # ============================================================
 # 工具函式
 # ============================================================
+# 大盤基準:用來判斷個股的技術訊號是「個股特性」還是「全市場走勢」。
+# 必須無條件同步 —— 不能依賴「剛好有人持有 0050」,
+# 否則那個人一移除追蹤,大盤對照就會靜默失效而沒有任何提示。
+# 需與 metrics.MARKET_BENCHMARK 一致。
+MARKET_BENCHMARK = "0050"
+
+
 def is_etf(symbol: str) -> bool:
     """
     判斷是否為 ETF(代號以 00 開頭:0050 / 00878 / 00953B / 009816 / 00403A)
@@ -793,7 +800,9 @@ def sync_symbol_light(symbol: str, days_back: int = 30):
 def sync_all_light(days_back: int = 30):
     """輕量同步全部持股(平日日更用)"""
     result = supabase.table("stocks").select("symbol").execute()
-    symbols = sorted({row["symbol"] for row in result.data})
+    symbols = {row["symbol"] for row in result.data}
+    symbols.add(MARKET_BENCHMARK)   # 大盤基準無條件納入
+    symbols = sorted(symbols)
     cost = sum(2 if is_etf(s) else 3 for s in symbols)
 
     print(f"\n{'='*50}")
@@ -822,12 +831,18 @@ def sync_all_holdings(days_back: int = 1095):
     """同步所有持股"""
     result = supabase.table("stocks").select("symbol").execute()
     # 去重:stocks 表有 user_id,同一檔被多筆持有會重複同步(純浪費額度)
-    symbols = sorted({row["symbol"] for row in result.data})
+    symbols = {row["symbol"] for row in result.data}
+    # 大盤基準無條件納入,即使沒有任何使用者持有
+    bench_added = MARKET_BENCHMARK not in symbols
+    symbols.add(MARKET_BENCHMARK)
+    symbols = sorted(symbols)
     n_etf = sum(1 for s in symbols if is_etf(s))
 
     print(f"\n{'='*50}")
     print(f"開始同步 {len(symbols)} 檔個股(回看 {days_back} 天 ≈ {days_back//365} 年)")
     print(f"其中 ETF {n_etf} 檔(跳過 PE / 月營收 / 季報 / 減資)")
+    if bench_added:
+        print(f"已自動納入大盤基準 {MARKET_BENCHMARK}(無人持有,但技術面對照需要)")
     print(f"{'='*50}")
     print_api_usage("(開始前)")
     print()

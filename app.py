@@ -694,8 +694,8 @@ def render_sticky_stock_header(label: str, latest, change: float, change_pct: fl
 # ============================================================
 # 頁面 1: 持股總覽
 # ============================================================
-@st.cache_data(ttl=300)
-def _portfolio_states(symbols: tuple, meta: dict):
+@st.cache_data(ttl=300, show_spinner=False)
+def _portfolio_states(symbols: tuple):
     """
     逐檔計算市場狀態與 KD 位階(組合現況用)。
 
@@ -707,7 +707,6 @@ def _portfolio_states(symbols: tuple, meta: dict):
     """
     rows, states, zones, fail = [], {}, {}, 0
     for sym in symbols:
-        m = meta.get(sym, {})
         try:
             df_adj, _ = load_adjusted_prices(sym)
             if df_adj.empty or len(df_adj) < 30:
@@ -739,7 +738,7 @@ def _portfolio_states(symbols: tuple, meta: dict):
             rows.append({"symbol": sym, "regime": rg["label"], "zone": zl,
                          "state": cs["label"], "state_icon": cs["icon"],
                          "state_meaning": cs["meaning"],
-                         "div_share": div_share, **m})
+                         "div_share": div_share})
         except Exception as e:
             print(f"[app] 組合狀態計算失敗 {sym}: {e}")
             fail += 1
@@ -930,17 +929,52 @@ def page_portfolio_overview():
     # 逐檔算市場狀態與 KD 位階(含快取)。
     # 這段要對每檔算布林、KD 序列、252 日帶寬百分位 —— 沒有快取的話
     # 每次頁面重整都重跑一遍,是總覽頁變慢的主因。
-    _rows_state, _states, _zones, _fail = _portfolio_states(
-        tuple(holdings["symbol"]),
-        {r["symbol"]: {
-            "name": r.get("name", r["symbol"]),
-            "weight": float(r["market_value"]) / total_value * 100 if total_value else 0,
-            "industry": r.get("industry", "-"),
-            "pnl_pct": float(r.get("pnl_pct", 0) or 0),
-            "pe_pct": None if pd.isna(r.get("pe_percentile")) else r.get("pe_percentile"),
-            "pb_pct": None if pd.isna(r.get("pb_percentile")) else r.get("pb_percentile"),
-        } for _, r in holdings.iterrows()},
-    )
+    _state_err = None
+    try:
+        _rows_state, _states, _zones, _fail = _portfolio_states(
+            tuple(holdings["symbol"]))
+        # meta 在快取外合併 —— 讓快取只以 symbol 為 key,
+        # 避免把含 numpy 型別的 dict 拿去雜湊(常見的雜湊失敗來源)
+        _meta = {}
+        for _, r in holdings.iterrows():
+            _pe, _pb = r.get("pe_percentile"), r.get("pb_percentile")
+            _meta[r["symbol"]] = {
+                "name": r.get("name", r["symbol"]),
+                "weight": (float(r["market_value"]) / total_value * 100
+                           if total_value else 0),
+                "industry": r.get("industry", "-"),
+                "pnl_pct": float(r.get("pnl_pct", 0) or 0),
+                "pe_pct": None if pd.isna(_pe) else float(_pe),
+                "pb_pct": None if pd.isna(_pb) else float(_pb),
+            }
+        _rows_state = [{**row, **_meta.get(row["symbol"], {})}
+                       for row in _rows_state]
+    except Exception as e:
+        _rows_state, _states, _zones, _fail = [], {}, {}, 0
+        _state_err = str(e)
+        print(f"[app] 組合現況計算失敗: {e}", flush=True)
+
+    # 全部失敗時要說話 —— 先前這段錯誤訊息寫在 if _rows_state 裡面,
+    # 於是「什麼都算不出來」時反而完全靜默,只留一個空標題。
+    if not _rows_state:
+        if _state_err:
+            st.warning(f"⚠️ 組合現況計算失敗:{_state_err}")
+        else:
+            st.warning(
+                f"⚠️ {len(holdings)} 檔持股都無法計算技術狀態。"
+                f"常見原因:股價資料不足 30 個交易日,或 `daily_prices` / "
+                f"`corporate_actions` 讀取失敗(雲端請確認 Secrets 與 RLS 設定)。")
+        with st.expander("逐檔診斷"):
+            for _s in holdings["symbol"]:
+                try:
+                    _dd, _rep = load_adjusted_prices(_s)
+                    st.markdown(
+                        f"- **{_s}**　股價 {len(_dd)} 筆"
+                        f"　還原 {'✅' if _rep.get('reliable', True) else '⚠️'}"
+                        + ("　:red[不足 30 筆]" if len(_dd) < 30 else ""))
+                except Exception as _e:
+                    st.markdown(f"- **{_s}**　:red[讀取失敗:{_e}]")
+
     if _rows_state:
         _n = len(_rows_state)
         _wt = {r["symbol"]: r["weight"] for r in _rows_state}

@@ -3474,23 +3474,15 @@ def page_transactions():
                         st.error(f"❌ 加入追蹤清單失敗: {e}")
                         st.stop()
                     
-                    # 2. 跑 FinMind 同步(等完才繼續)
-                    with st.spinner(f"🔄 正在抓取 {final_symbol} {name_input} 近 3 年資料(約 30 秒)..."):
-                        try:
-                            result = subprocess.run(
-                                [sys.executable, "-c", 
-                                 f"from data_pipeline import sync_symbol; sync_symbol('{final_symbol}')"],
-                                capture_output=True, text=True, timeout=180
-                            )
-                            if result.returncode != 0:
-                                st.warning(f"⚠️ FinMind 同步未完全成功,但股票已加入。可稍後到側邊欄「同步最新資料」重試")
-                                with st.expander("查看同步 log"):
-                                    st.code(result.stderr[-1000:] if result.stderr else result.stdout[-1000:])
-                        except subprocess.TimeoutExpired:
-                            st.warning("⏰ 同步超過 3 分鐘,請稍後手動同步")
-                        except Exception as e:
-                            st.warning(f"⚠️ 同步異常: {e}")
+                    # ⚠️ FinMind 同步移到「兩筆寫入都完成之後」才做。
+                    # 原本放在 stocks 與 transactions 兩個寫入中間,
+                    # 而它是一個最長 180 秒的阻塞 subprocess ——
+                    # 雲端環境對長阻塞很敏感,script 一旦在那裡被中斷,
+                    # 就會變成「追蹤清單有這檔、但交易紀錄沒有」的半套狀態。
+                    # 兩個必須都成功的寫入,中間不該放慢且會失敗的操作。
+                    _need_sync = True
                 else:
+                    _need_sync = False
                     final_symbol = symbol_from_select
                 
                 # === 價格合理性檢查 ===
@@ -3518,13 +3510,39 @@ def page_transactions():
                         "note": note or None,
                     }).execute()
                     st.cache_data.clear()
-                    if is_new_stock:
-                        st.success(f"✅ 完成!已新增追蹤 {final_symbol} 並儲存交易")
-                    else:
-                        st.success(f"✅ 已儲存:{txn_date} {final_symbol} {action.upper()} {shares:,} 股 @ {price}")
+                    st.success(f"✅ 已儲存:{txn_date} {final_symbol} "
+                               f"{action.upper()} {shares:,} 股 @ {price}")
+
+                    # 兩筆都寫進去了,現在才做同步 ——
+                    # 就算這裡失敗或逾時,資料也已經是完整的。
+                    if _need_sync:
+                        with st.spinner(f"🔄 順便抓取 {final_symbol} 近 3 年資料"
+                                        f"(約 30 秒,失敗也不影響已儲存的交易)..."):
+                            try:
+                                result = subprocess.run(
+                                    [sys.executable, "-c",
+                                     f"from data_pipeline import sync_symbol; "
+                                     f"sync_symbol('{final_symbol}')"],
+                                    capture_output=True, text=True, timeout=120
+                                )
+                                if result.returncode != 0:
+                                    st.warning("⚠️ 資料同步未完全成功,交易已儲存。"
+                                               "可到側邊欄「同步最新資料」重試")
+                                    with st.expander("查看同步 log"):
+                                        st.code((result.stderr or result.stdout)[-1000:])
+                                else:
+                                    st.success("✅ 資料同步完成")
+                            except subprocess.TimeoutExpired:
+                                st.warning("⏰ 同步逾時,交易已儲存 —— "
+                                           "請到側邊欄「同步最新資料」補跑")
+                            except Exception as e:
+                                st.warning(f"⚠️ 同步異常({e}),交易已儲存")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 儲存交易失敗: {e}")
+                    if _need_sync:
+                        st.warning(f"⚠️ {final_symbol} 已加入追蹤清單但交易未儲存 —— "
+                                   f"請改用「📌 從追蹤清單選擇」模式重新登錄這筆交易")
     
     # ============================================
     # Tab 2: 交易紀錄(列表 + 編輯 + 刪除)

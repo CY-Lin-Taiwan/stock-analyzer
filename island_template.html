@@ -47,6 +47,11 @@ canvas{display:block;width:100%;height:auto;cursor:pointer;touch-action:manipula
 .wx{position:absolute;left:12px;top:10px;font-size:.8rem;background:var(--panel);border:1px solid var(--line);padding:3px 10px;border-radius:999px;font-family:var(--f-data)}
 .fs{position:absolute;right:12px;top:10px;font:inherit;font-size:.8rem;background:var(--panel);color:var(--ink);
   border:1px solid var(--line);padding:3px 12px;border-radius:999px;cursor:pointer}
+.flowtag{position:absolute;right:12px;top:46px;font-size:.8rem;line-height:1.5;background:var(--panel);border:1px solid var(--line);
+  padding:5px 12px;border-radius:10px;font-variant-numeric:tabular-nums;max-width:calc(100% - 24px);display:flex;flex-direction:column;gap:1px}
+.flowtag span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.flowtag b{font-weight:700}
+.flowtag .peer{color:var(--muted)}
 .fs:hover{border-color:var(--link);color:var(--link)}
 .fs:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 /* 全螢幕時:地圖與右欄一起放大,不限最大寬度 */
@@ -132,6 +137,7 @@ aside{display:flex;flex-direction:column;gap:12px;min-width:0}
         <canvas id="cv" aria-label="持股島地圖,點建築可看詳細資料"></canvas>
         <div class="wx" id="wx"></div>
         <button class="fs" id="fs" type="button">⛶ 全螢幕</button>
+        <div class="flowtag" id="flowtag" hidden></div>
         <div class="logbox" id="logbox">
           <div class="ticker">
             <span class="live">最新</span>
@@ -346,7 +352,7 @@ function fit(){
     const fx = effectOf(b, mkt).k;
     y0 = Math.min(y0, (b.gx+b.gy+b.s)/4 - hUnits(b)/2 - (fx ? 1.15 : .55));
   });
-  const TICKER = 52, TOP = 44;              // 底部跑馬燈、左上天氣標籤的高度
+  const TICKER = 52, TOP = 100;              // 底部跑馬燈、上方天氣標籤與張數標籤的高度
   const spanX = x1-x0, spanY = y1-y0;
   let u = w*.97/spanX;
   // 高度跟著島的實際比例走,不再固定 0.8 倍寬而留下大片海
@@ -584,7 +590,7 @@ function frame(t){
   });
   // 街區名牌(地面):放在街區最前方的角落,帶底板
   layout.cl.forEach((c,i)=>{
-    const p=c.plot, [x,y]=iso(p.x1+1,p.y1+1);
+    const p=c.plot, [x,y]=iso(p.x0,p.y1+1);
     const txt = `${"ABCDEF"[i]} 區 ${c.w}%`;
     ctx.font=`700 ${Math.max(11,Math.min(14,TH*.42))}px ${F_BODY}`;
     const tw = ctx.measureText(txt).width + 14, th = Math.max(18,Math.min(22,TH*.6));
@@ -663,6 +669,7 @@ function frame(t){
     if (flows.length>1 && flows[0].ang + 2*Math.PI - flows[flows.length-1].ang < GAP)
       flows[flows.length-1].ang = flows[0].ang + 2*Math.PI - GAP;
     const fmt = n => (n>0?"+":"") + Math.round(n).toLocaleString();
+    const maxNet = Math.max(1, ...flows.map(f=>Math.abs(f.net)));
     flows.forEach(f=>{
       const [bx,by] = cen[f.i];
       const dx = Math.cos(f.ang), dy = Math.sin(f.ang)*.5;
@@ -671,7 +678,8 @@ function frame(t){
       while (L < Math.max(W,H) && onLand(bx+dx*L, by+dy*L)) L += TW*.15;
       L = Math.max(TW*1.6, L + TW*.3);
       const sx = bx + dx*L, sy = by + dy*L;
-      const mag = Math.min(1, Math.abs(f.net)/5000);
+      // 密度:跟組合裡進出最大的那檔比,開根號讓小量也看得到人
+      const mag = Math.sqrt(Math.abs(f.net)/maxNet);
       const col = f.net>0 ? C.buy : C.sell;
       // 步道
       ctx.lineCap="round";
@@ -696,7 +704,6 @@ function frame(t){
         // 面向:買超往大樓走(方向 -dx),賣超往碼頭走(方向 +dx)
         drawWalker(x, y, into ? -dx : dx, col, fade, reduce ? 0 : t/140 + k*1.7, k + f.i*3);
       }
-      crowdLabels.push({x:sx+dx*TH*1.1, y:sy+dy*TH*1.1, txt:`${f.b.name} ${fmt(f.net)} 張`, col});
     });
   }
   // 建築
@@ -831,11 +838,34 @@ function renderLegend(){
     ${li("Ⓜ","捷運","不同街區之間,只要有任一組持股相關性 0.3 以上就通車,代表有一定連動但還算不同區。線越粗、車越多,關聯越強")}
     ${li(`<i class="sw" style="display:block;background:var(--buy)"></i>`,"法人人流:紅衣 = 買超","外資加投信近 5 日合計買超,人從海岸碼頭走進大樓")}
     ${li(`<i class="sw" style="display:block;background:var(--sell)"></i>`,"法人人流:綠衣 = 賣超","外資加投信近 5 日合計賣超,人從大樓走出來往碼頭去")}
-    <li><span class="ic"></span><span>人越多越擠代表張數越多,5,000 張以上最擠。碼頭端標示個股與合計張數。外資與投信方向相反時會互相抵銷,各自的數字在「個股」分頁。</span></li>
+    <li><span class="ic"></span><span>人越多越擠代表張數越多,以你組合裡進出最大的那檔為最擠,其他依比例。點選一棟樓時,地圖右上角會顯示它的合計張數,以及最常跟它一起動的持股。外資與投信方向相反時會互相抵銷,各自的數字在「個股」分頁。</span></li>
   </ul></details>`;
   $("log").innerHTML = DATA.log.map(([d,s],i)=>`<li><button data-i="${i}"><time>${d}</time>${s}</button></li>`).join("");
   $("more").textContent = `全部 ${DATA.log.length} 則 →`;
   showTick();
+}
+// 選取那棟的摘要,固定顯示在全螢幕按鈕下方(不跟著碼頭位置跑):
+//   第一行 = 法人進出;第二行 = 最常一起動的持股與它在地圖上怎麼連著
+function renderFlowTag(){
+  const el = $("flowtag"), b = selected;
+  if (!b){ el.hidden = true; return; }
+  const lines = [];
+  const net = b.f5 + b.t5;
+  if (net && $("flow").checked){
+    const col = net>0 ? "var(--buy)" : "var(--sell)";
+    lines.push(`<span style="color:${col}"><b>${b.name}</b> 外資+投信 5 日 ${net>0?"+":""}${Math.round(net).toLocaleString()} 張</span>`);
+  }
+  if ($("lines").checked){
+    const peer = layout.bld.filter(x=>x!==b).map(x=>[x,corrOf(b.sym,x.sym)]).sort((p,q)=>q[1]-p[1])[0];
+    if (peer){
+      const [x,r] = peer, thr = +$("thr").value;
+      const how = (x.district===b.district && r>=thr) ? "空橋相連" : r>=.3 ? "捷運相連" : "無明顯連動";
+      lines.push(`<span class="peer">${lines.length?"":`<b style="color:var(--ink)">${b.name}</b> `}最同步:${x.name} ${r.toFixed(2)}(${how})</span>`);
+    }
+  }
+  if (!lines.length){ el.hidden = true; return; }
+  el.innerHTML = lines.join("");
+  el.hidden = false;
 }
 function renderPick(){
   const mkt = mktRegime();
@@ -851,6 +881,7 @@ function renderDetail(b){
   const peers = DATA.holdings.filter(h=>h.sym!==b.sym).map(h=>[h,corrOf(b.sym,h.sym)])
                 .sort((a,c)=>c[1]-a[1]).slice(0,3);
   $("pick").value = b.sym;
+  renderFlowTag();
   $("detailBody").innerHTML = `
     <p class="eyebrow">${b.ind} · ${"ABCDEF"[b.district]} 區</p>
     <h2>${b.sym} ${b.name}</h2>
@@ -878,7 +909,7 @@ cv.addEventListener("click", e=>{
   const r = cv.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
   const hit = [...layout.bld].sort((a,b)=>(b.gx+b.gy)-(a.gx+a.gy)).find(b=>b.hit && x>=b.hit.x0&&x<=b.hit.x1&&y>=b.hit.y0&&y<=b.hit.y1);
   selected = hit || null;
-  if (hit){ renderDetail(hit); showTab("detail"); }
+  if (hit){ renderDetail(hit); showTab("detail"); } else renderFlowTag();
   if (reduce) frame(0);
 });
 // ===== 日誌跑馬燈 =====
@@ -959,8 +990,8 @@ function rebuild(){
   if (selected) selected = layout.bld.find(b=>b.sym===selected.sym);
   fit(); renderSide(); if (reduce) frame(0);
 }
-$("thr").addEventListener("input", ()=>{ $("thrv").textContent=(+$("thr").value).toFixed(2); rebuild(); });
-["regime","lines","flow"].forEach(id=>$(id).addEventListener("change", ()=>{ fit(); renderSide(); renderPick(); if(selected) renderDetail(selected); if(reduce) frame(0); }));
+$("thr").addEventListener("input", ()=>{ $("thrv").textContent=(+$("thr").value).toFixed(2); rebuild(); renderFlowTag(); });
+["regime","lines","flow"].forEach(id=>$(id).addEventListener("change", ()=>{ fit(); renderSide(); renderPick(); renderFlowTag(); if(selected) renderDetail(selected); if(reduce) frame(0); }));
 addEventListener("resize", ()=>{ fit(); seedDrops(); if(reduce) frame(0); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", ()=>{ readColors(); if(reduce) frame(0); });
 new MutationObserver(()=>{ readColors(); if(reduce) frame(0); }).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});

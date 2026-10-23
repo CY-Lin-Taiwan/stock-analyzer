@@ -194,7 +194,7 @@ const SAMPLE = {
     {sym:"2330",name:"台積電",ind:"半導體",w:24,regime:"上升趨勢",zone:"偏強區",state:"趨勢延續",pnl:41.5,div:9,f5:5100,t5:820},
     {sym:"00919",name:"群益精選高息",ind:"高股息ETF",w:16,regime:"區間震盪",zone:"超賣區",state:"區間下緣",pnl:-2.1,div:71,f5:0,t5:0},
     {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"下降趨勢",zone:"偏強區",state:"跌勢中反彈",pnl:-14.8,div:22,f5:310,t5:-120},
-    {sym:"2395",name:"研華",ind:"電腦週邊",w:12,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:6.4,div:31,f5:-480,t5:60},
+    {sym:"2395",name:"研華",ind:"電腦週邊",w:12,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:6.4,div:31,f5:-480,t5:60,divWarn:"配息已連續 2 年下滑"},
     {sym:"2609",name:"陽明",ind:"航運",w:9,regime:"區間震盪",zone:"超買區",state:"區間上緣",pnl:9.7,div:62,f5:1800,t5:-90},
   ],
   corr:{"2603|2609":.82,"2330|3675":.48,"2330|2395":.43,"3675|2395":.39,"2330|00919":.36,
@@ -240,8 +240,18 @@ const WEATHER = {
 //   起火 = 個股下降趨勢但大盤沒在下雨(自己的問題),或股息持續性有 ⚠️ 警報
 //   冒煙 = 個股下降趨勢,大盤也在下雨(被大環境拖累)
 //   金光 = 個股上升趨勢,而大盤不是晴天(自己在漲)
+// 配息型 = 近 3 年配息佔總報酬 ≥ 40%(與個股頁「股價為主 / 雙引擎」的分界一致)。
+// 配息警報只對配息型起火;價差型的配息變化不影響投資邏輯,只在個股分頁提醒。
+const DIV_TYPE_PCT = 40;
+const isDivType = b => b.div!=null && b.div >= DIV_TYPE_PCT;
+const divIssue = b => [b.divWarn, b.erosion].filter(Boolean).join("；");
 function effectOf(b, mkt){
-  if (b.divWarn) return {k:"fire", why:`股息警報:${b.divWarn}`};
+  if (isDivType(b) && divIssue(b))
+    return {k:"fire", why:`配息型(配息佔報酬 ${b.div}%),而${divIssue(b)}`};
+  if (b.breakdown)
+    return DATA.market?.breakdown
+      ? {k:"smoke", why:`${b.breakdown}。但 0050 也同樣破線,屬全市場下跌`}
+      : {k:"fire",  why:`${b.breakdown},而 0050 沒有破線,是個股自己的問題`};
   if (b.regime==="下降趨勢")
     return mkt==="下降趨勢"
       ? {k:"smoke", why:"個股與大盤同步下跌,屬大環境拖累"}
@@ -316,6 +326,7 @@ const iso = (gx,gy) => [OX+(gx-gy)*TW/2, OY+(gx+gy)*TH/2];
 const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
 function fillHeight(){
   if ((!LIVE && !fsEl()) || innerWidth <= 860) return 0;   // 手機版上下堆疊,不撐滿
+  if (window.top === window && !fsEl()) return 0;          // 獨立分頁:依內容高度即可
   const col = cv.closest(".stage").parentElement;    // 左欄
   const top = col.getBoundingClientRect().top + scrollY;
   const others = col.getBoundingClientRect().height - cv.getBoundingClientRect().height;
@@ -676,8 +687,10 @@ function renderLegend(){
     <li><span class="ic"></span><span>看的是中期方向,不是當天漲跌。單日跌 1% 只要均線還往上,仍是晴天。</span></li>
   </ul></details>
   <details open><summary>大樓特效 = 個股 vs 大盤</summary><ul>
-    ${li("🔥","起火","個股在下降趨勢,但大盤沒在下雨,是這檔自己的問題。股息持續性出現警報(配息靠老本、連續衰退)也會起火。")}
-    ${li("💨","冒煙","個股在下降趨勢,大盤也在下雨,屬大環境拖累")}
+    ${li("🔥","起火(破線)","收盤同時跌破 5、20、60 日均線,且 20 日與 60 日均線都比 5 天前低,而 0050 沒有同樣破線。反應比下降趨勢快,急跌時會先抓到")}
+    ${li("🔥","起火(趨勢)","個股在下降趨勢,但大盤沒在下雨,是這檔自己的問題。")}
+    ${li("🔥","起火(配息型)","配息佔近 3 年報酬 40% 以上的持股,出現配息靠老本、配息連續衰退,或「賺股息、賠價差」時也會起火。價差型持股的配息變化只在個股分頁提醒,不起火。")}
+    ${li("💨","冒煙","個股破線或在下降趨勢,但 0050 也一樣,屬大環境拖累")}
     ${li("✨","金光","個股在上升趨勢,而大盤不是晴天,是自己在漲")}
     ${li("🏢","無特效","跟著大盤走,或沒有需要留意的訊號")}
     <li><span class="ic"></span><span>判斷不看你的損益,套牢不會讓樓起火。</span></li>
@@ -718,6 +731,7 @@ function renderDetail(b){
     <span class="pill"><i class="dot" style="background:var(${v})"></i>${b.state}</span>
     <p class="meaning">${mean}</p>
     ${(()=>{const e=effectOf(b,mktRegime());return `<p class="fxline"><b>${e.k?EFFECT_NAME[e.k]:"🏢 無特效"}</b>　${e.why}</p>`;})()}
+    ${(!isDivType(b) && divIssue(b)) ? `<p class="fxline" style="background:transparent"><b>ℹ️ 配息提醒</b>　${divIssue(b)}。這檔配息只佔報酬 ${b.div==null?"—":b.div+"%"},屬價差型,所以不起火。</p>` : ""}
     <dl class="kv" style="margin-top:10px">
       <dt>市值權重</dt><dd>${b.w}%</dd>
       <dt>中期趨勢</dt><dd>${b.regime}</dd>
@@ -764,7 +778,22 @@ $("log").addEventListener("click", e=>{
 (function(){
   const root = document.documentElement, btn = $("fs");
   const can = document.fullscreenEnabled || document.webkitFullscreenEnabled;
-  if (!can){ btn.hidden = true; return; }       // 瀏覽器或嵌入環境不允許時直接隱藏
+  if (!can){
+    // iPhone Safari 不支援網頁區塊全螢幕 → 改成把整頁開到新分頁,用滿手機畫面。
+    // 已經是獨立分頁(不在嵌入框裡)時就不需要這顆鈕。
+    if (window.top === window){ btn.hidden = true; return; }
+    btn.textContent = "⤢ 新分頁開啟";
+    btn.onclick = ()=>{
+      try {
+        const html = "<!doctype html>\n" + document.documentElement.outerHTML;
+        const url = URL.createObjectURL(new Blob([html], {type:"text/html"}));
+        const a = document.createElement("a");
+        a.href = url; a.target = "_blank"; a.rel = "noopener";
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (e) { btn.hidden = true; }
+    };
+    return;
+  }
   btn.onclick = async ()=>{
     try {
       if (fsEl()) await (document.exitFullscreen || document.webkitExitFullscreen).call(document);

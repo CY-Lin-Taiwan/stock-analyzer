@@ -765,7 +765,7 @@ def _island_extras(symbols: tuple):
     today = pd.Timestamp.now().normalize()
 
     for sym in symbols:
-        ex = {"f5": 0, "t5": 0, "div_warn": None}
+        ex = {"f5": 0, "t5": 0, "div_warn": None, "erosion": None, "breakdown": None}
         name = sym
         try:
             name = next((s["name"] for s in load_stocks(get_user_id())
@@ -797,6 +797,7 @@ def _island_extras(symbols: tuple):
         # KD 交叉(近 5 個交易日)
         try:
             df_adj, _ = load_adjusted_prices(sym)
+            ex["breakdown"] = island_component.ma_breakdown(df_adj["close"]) if not df_adj.empty else None
             kd = metrics.calculate_kd(df_adj) if len(df_adj) >= 30 else None
             if (kd and kd.get("cross") in ("golden", "death")
                     and kd["cross_days_ago"] <= 5):
@@ -830,6 +831,21 @@ def _island_extras(symbols: tuple):
         except Exception as e:
             print(f"[island] 除息 {sym}: {e}")
 
+        # 賺股息、賠價差:近 3 年股價下跌,靠配息才轉正。
+        # 只有配息型持股會因此起火(判斷在 island_component / 模板裡)。
+        try:
+            _raw = pd.DataFrame(load_prices(sym))
+            _adj, _ = load_adjusted_prices(sym)
+            if not _raw.empty and not _adj.empty:
+                _raw["date"] = pd.to_datetime(_raw["date"])
+                _raw = _raw.sort_values("date").reset_index(drop=True)
+                _tr = metrics.calculate_total_return(_adj["close"], _raw["close"], years=3)
+                if _tr and _tr["price_return_pct"] <= 0 < _tr["total_return_pct"]:
+                    ex["erosion"] = (f"近 {_tr['years']} 年股價 {_tr['price_return_pct']:+.1f}%,"
+                                     f"含息才 {_tr['total_return_pct']:+.1f}%,賺股息、賠價差")
+        except Exception as e:
+            print(f"[island] 含息報酬 {sym}: {e}")
+
         # 股息持續性警報(ETF 沒有財報,自然不會觸發)
         try:
             r1 = db_retry(lambda: supabase.table("dividends")
@@ -854,6 +870,16 @@ def _island_extras(symbols: tuple):
 
     log.sort(key=lambda x: x[0], reverse=True)
     return extras, log[:10]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _market_breakdown():
+    """大盤基準是否也跌破三線下彎(是的話,個股破線只算冒煙)"""
+    try:
+        df_m, _ = load_adjusted_prices(metrics.MARKET_BENCHMARK)
+        return bool(island_component.ma_breakdown(df_m["close"])) if not df_m.empty else False
+    except Exception:
+        return False
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1127,7 +1153,8 @@ def page_portfolio_overview():
             _payload_i = island_component.build_payload(
                 _rows_state, _ex_i, _island_corr(_syms_i), _mkt, _log_i,
                 theme=_streamlit_theme(),
-                asof=load_data_freshness().get("股價/PE"))
+                asof=load_data_freshness().get("股價/PE"),
+                market_breakdown=_market_breakdown())
             # 標題與結論句放在框外,當這一區的說明標題
             _head_i, _fx_i = island_component.summarize(_payload_i)
             st.markdown("### 🏝️ 持股島")

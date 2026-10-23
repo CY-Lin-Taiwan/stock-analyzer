@@ -42,6 +42,7 @@ def build_payload(
     log: List[Tuple[str, str]],
     theme: Optional[str] = None,
     asof: Optional[str] = None,
+    market_breakdown: bool = False,
 ) -> Dict:
     """
     Args:
@@ -68,6 +69,8 @@ def build_payload(
             "f5": int(ex.get("f5") or 0),
             "t5": int(ex.get("t5") or 0),
             "divWarn": ex.get("div_warn"),
+            "erosion": ex.get("erosion"),
+            "breakdown": ex.get("breakdown"),
         })
     holdings.sort(key=lambda h: -h["w"])
 
@@ -79,17 +82,56 @@ def build_payload(
         "live": True,
         "asof": str(asof)[:10] if asof else None,
         "theme": theme if theme in ("light", "dark") else None,
-        "market": {"regime": (market_ctx or {}).get("regime_label") or "資料不足"},
+        "market": {"regime": (market_ctx or {}).get("regime_label") or "資料不足",
+                   "breakdown": bool(market_breakdown)},
         "holdings": holdings,
         "corr": corr,
         "log": [[d[5:].replace("-", "/"), t] for d, t in log],
     }
 
 
-def _effect(h: Dict, mkt: str) -> Optional[str]:
+DIV_TYPE_PCT = 40   # 配息佔近 3 年報酬 ≥ 40% 視為配息型(與個股頁分級一致)
+MA_SLOPE_DAYS = 5   # 均線「下彎」= 比 N 個交易日前低
+
+
+def ma_breakdown(close) -> Optional[str]:
+    """
+    跌破三線且均線下彎:收盤低於 5/20/60 日均線,且 20 日、60 日均線都比 5 天前低。
+
+    為什麼另外加這條:原本的「下降趨勢」看 20 日均線 10 天斜率 ≥ 2%,
+    反應很慢 —— 股價急跌兩成,20 日線可能才剛開始彎,還判不出下降趨勢。
+    這條是看盤的人最直覺的「破線」判斷,反應快得多。
+
+    Args:
+        close: 還原收盤價序列(pandas Series,舊到新)
+    Returns: 說明文字,未觸發回 None
+    """
+    try:
+        if close is None or len(close) < 60 + MA_SLOPE_DAYS:
+            return None
+        ma5 = close.rolling(5).mean()
+        ma20 = close.rolling(20).mean()
+        ma60 = close.rolling(60).mean()
+        c = float(close.iloc[-1])
+        m5, m20, m60 = float(ma5.iloc[-1]), float(ma20.iloc[-1]), float(ma60.iloc[-1])
+        below = c < m5 and c < m20 and c < m60
+        down = (m20 < float(ma20.iloc[-1 - MA_SLOPE_DAYS])
+                and m60 < float(ma60.iloc[-1 - MA_SLOPE_DAYS]))
+        if below and down:
+            return (f"收盤 {c:,.2f} 跌破 5 日線 {m5:,.2f}、20 日線 {m20:,.2f}、"
+                    f"60 日線 {m60:,.2f},且均線下彎")
+    except Exception:
+        return None
+    return None
+
+
+def _effect(h: Dict, mkt: str, mkt_breakdown: bool = False) -> Optional[str]:
     """與模板裡 effectOf() 相同的規則"""
-    if h.get("divWarn"):
+    div_type = h.get("div") is not None and h["div"] >= DIV_TYPE_PCT
+    if div_type and (h.get("divWarn") or h.get("erosion")):
         return "fire"
+    if h.get("breakdown"):
+        return "smoke" if mkt_breakdown else "fire"
     if h["regime"] == "下降趨勢":
         return "smoke" if mkt == "下降趨勢" else "fire"
     if h["regime"] == "上升趨勢" and mkt != "上升趨勢":
@@ -144,7 +186,7 @@ def summarize(payload: Dict, thr: float = 0.40) -> Tuple[str, str]:
     names = {"fire": "🔥 起火", "smoke": "💨 冒煙", "gold": "✨ 金光"}
     fx = {k: [] for k in names}
     for h in hs:
-        k = _effect(h, mkt)
+        k = _effect(h, mkt, payload["market"].get("breakdown", False))
         if k:
             fx[k].append(h["name"])
     fx_line = "　".join(f"{names[k]} {'、'.join(v)}" for k, v in fx.items() if v)

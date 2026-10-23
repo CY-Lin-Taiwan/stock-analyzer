@@ -151,8 +151,8 @@ aside{display:flex;flex-direction:column;gap:12px;min-width:0}
         <label for="thr">街區分界：相關性 ≥ <span id="thrv" style="font-family:var(--f-data)">0.40</span>
           <input id="thr" type="range" min="0.2" max="0.8" step="0.05" value="0.4">
           <b id="thrOut" style="color:var(--link)"></b></label>
-        <label for="lines"><input id="lines" type="checkbox" checked>協作線</label>
-        <label for="flow"><input id="flow" type="checkbox" checked>法人洋流</label>
+        <label for="lines"><input id="lines" type="checkbox" checked>空橋與捷運</label>
+        <label for="flow"><input id="flow" type="checkbox" checked>法人人流</label>
       </div>
       <p class="hint" id="tip">點一棟樓看個股資訊。試試切換大盤天氣：同一棟德微，大盤多雲時起火，大盤下雨時只是冒煙；台積電在晴天以外才會發金光。拉動街區門檻，看看「分散」在哪個數字瓦解。</p>
     </div>
@@ -290,7 +290,7 @@ function clusters(thr){
 // ===== 版面:格子座標 =====
 const N = 16;
 const SLOTS = [[2,2],[9,2],[2,9],[9,9],[5,12],[12,5]];
-let layout = null;
+let layout = null, landSet = new Set();
 function buildLayout(thr){
   const cl = clusters(thr), bld = [], plots = [];
   cl.forEach((c,i)=>{
@@ -317,6 +317,7 @@ function buildLayout(thr){
     if (d<=1 || (d===2 && hash(x,y)>.45)) land.push({x,y,plot, beach:d>=1});
   }
   layout = {cl, bld, land};
+  landSet = new Set(land.map(t=>t.x+","+t.y));
 }
 
 // ===== 等角投影 =====
@@ -494,6 +495,64 @@ function drawEffect(fx, b, x, y, s, t){
   }
 }
 
+// 螢幕座標是否落在陸地上(反推等角格子)
+function onLand(x, y){
+  const u = (x-OX)/(TW/2), v = (y-OY)/(TH/2);
+  const gx = Math.floor((u+v)/2), gy = Math.floor((v-u)/2);
+  return landSet.has(gx+","+gy);
+}
+// 走路的小人:Q 版比例(大頭、圓身),衣服顏色區分紅買綠賣,
+// 頭髮與膚色依序換幾種,讓人群看起來是不同的人。
+const HAIR = ["#3A2A20","#1F1F24","#6B4423","#8A5A2B","#2E2A3A"];
+const SKIN = ["#F3D3B5","#EBC39F","#DDB08C","#F6DCC3"];
+function drawWalker(x, y, face, col, alpha, phase, v){
+  const h = Math.max(11, TH*.9), A0 = ctx.globalAlpha;
+  const dir = face>0 ? 1 : -1, sw = Math.sin(phase), bob = Math.abs(Math.cos(phase))*h*.03;
+  ctx.globalAlpha = A0*alpha;
+  // 影子
+  ctx.fillStyle = "rgba(0,0,0,.16)";
+  ctx.beginPath(); ctx.ellipse(x, y, h*.2, h*.07, 0, 0, 7); ctx.fill();
+  ctx.lineCap = "round";
+  // 腿(深色褲子)
+  ctx.strokeStyle = "#3B4252"; ctx.lineWidth = Math.max(1.6, h*.11);
+  ctx.beginPath();
+  ctx.moveTo(x-h*.05, y-h*.3-bob); ctx.lineTo(x-h*.05+sw*h*.1, y-h*.02);
+  ctx.moveTo(x+h*.05, y-h*.3-bob); ctx.lineTo(x+h*.05-sw*h*.1, y-h*.02);
+  ctx.stroke();
+  // 後手臂
+  ctx.strokeStyle = shade(col,-.3); ctx.lineWidth = Math.max(1.4, h*.09);
+  ctx.beginPath(); ctx.moveTo(x-dir*h*.1, y-h*.55-bob); ctx.lineTo(x-dir*h*.1-sw*h*.1, y-h*.35-bob); ctx.stroke();
+  // 衣服(身體)
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.roundRect(x-h*.15, y-h*.62-bob, h*.3, h*.34, h*.1); ctx.fill();
+  ctx.fillStyle = shade(col,-.18);
+  ctx.beginPath(); ctx.roundRect(x+dir*h*.02-(dir<0?h*.13:0), y-h*.62-bob, h*.13, h*.34, h*.08); ctx.fill();
+  // 前手臂
+  ctx.strokeStyle = shade(col,-.12); ctx.lineWidth = Math.max(1.4, h*.09);
+  ctx.beginPath(); ctx.moveTo(x+dir*h*.1, y-h*.55-bob); ctx.lineTo(x+dir*h*.1+sw*h*.1, y-h*.35-bob); ctx.stroke();
+  // 頭
+  const hx = x+dir*h*.02, hy = y-h*.8-bob, hr = h*.2;
+  ctx.fillStyle = SKIN[v % SKIN.length];
+  ctx.beginPath(); ctx.arc(hx, hy, hr, 0, 7); ctx.fill();
+  // 頭髮
+  ctx.fillStyle = HAIR[v % HAIR.length];
+  ctx.beginPath(); ctx.arc(hx-dir*hr*.15, hy-hr*.15, hr*1.02, Math.PI*1.05, Math.PI*1.95); ctx.fill();
+  // 眼睛(看出面向)
+  ctx.fillStyle = "#2A2A2A";
+  ctx.beginPath(); ctx.arc(hx+dir*hr*.45, hy+hr*.05, Math.max(.8, hr*.12), 0, 7); ctx.fill();
+  ctx.lineCap = "butt"; ctx.globalAlpha = A0;
+}
+// 跨街區的捷運:兩區之間最強的一組相關性 ≥ 0.3 才通車(同區的已是空橋)
+function metroLinks(){
+  const out = [], cl = layout.cl;
+  for (let i=0;i<cl.length;i++) for (let j=i+1;j<cl.length;j++){
+    let best = 0;
+    cl[i].members.forEach(a=>cl[j].members.forEach(b=>{ best = Math.max(best, corrOf(a.sym,b.sym)); }));
+    if (best >= .3) out.push({i, j, r:best});
+  }
+  return out;
+}
+
 function roofPoint(b){ return b.roof || iso(b.gx+b.s/2,b.gy+b.s/2); }
 
 // ===== 天氣粒子 =====
@@ -523,12 +582,74 @@ function frame(t){
     const dc = tl.plot ? C["d"+(tl.plot.idx%6)] : null;
     diamond(tl.x,tl.y,1, dc || (tl.beach? C.sand : C.grass), dc ? shade(dc,-.12) : null);
   });
-  // 法人洋流:每棟樓一條從外海通往大樓的流道。
-  //   顏色 = 方向(台股慣例:紅 = 外資+投信買超、綠 = 賣超)
-  //   箭頭 = 流向(買超指向大樓、賣超指向外海),靜止時也看得出進出
-  //   粗細 = 張數(5,000 張以上最粗)
-  //   外海端標名稱與張數,不必沿線追是哪一棟
-  // 同街區的樓方向接近,流道會疊在一起,所以把角度攤開,至少相隔約 28°。
+  // 街區名牌(地面):放在街區最前方的角落,帶底板
+  layout.cl.forEach((c,i)=>{
+    const p=c.plot, [x,y]=iso(p.x1+1,p.y1+1);
+    const txt = `${"ABCDEF"[i]} 區 ${c.w}%`;
+    ctx.font=`700 ${Math.max(11,Math.min(14,TH*.42))}px ${F_BODY}`;
+    const tw = ctx.measureText(txt).width + 14, th = Math.max(18,Math.min(22,TH*.6));
+    ctx.globalAlpha = (focusD===null || focusD===i) ? 1 : .35;
+    ctx.fillStyle = C["d"+(i%6)]; ctx.strokeStyle = shade(C["d"+(i%6)],-.25); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.roundRect(x-tw/2, y+TH*.25, tw, th, th/2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=C.ink; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(txt, x, y+TH*.25+th/2+.5);
+    ctx.globalAlpha = 1;
+  });
+  // ---- 捷運:跨街區的中度關聯(0.3 ≤ 相關性 < 門檻)----
+  // 以街區為單位設站,兩區之間只要有任一組持股相關性 ≥ 0.3 就通車。
+  // 線越粗、車越多 = 關聯越強。同街區的強關聯改用空橋(畫在大樓之後)。
+  if ($("lines").checked){
+    const st = layout.cl.map(c=>{ const p=c.plot; return iso((p.x0+p.x1+1)/2, (p.y0+p.y1+1)/2); });
+    const links = metroLinks();
+    links.forEach(({i,j,r})=>{
+      if (focusD!==null && i!==focusD && j!==focusD) return;
+      const [ax,ay]=st[i], [bx,by]=st[j];
+      const mx=(ax+bx)/2, my=(ay+by)/2 - TH*.6;
+      const k = Math.max(0, Math.min(1, (r-.3)/.5)), w = TH*(.18 + k*.22);
+      // 軌道:路基 + 枕木 + 軌道線
+      ctx.lineCap="round";
+      ctx.strokeStyle = shade(C.sand,-.3); ctx.lineWidth = w*2.2; ctx.globalAlpha=.55;
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.quadraticCurveTo(mx,my,bx,by); ctx.stroke();
+      ctx.globalAlpha=1;
+      ctx.setLineDash([2, TH*.28]); ctx.strokeStyle = C.muted; ctx.lineWidth = w*1.6;
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.quadraticCurveTo(mx,my,bx,by); ctx.stroke();
+      ctx.setLineDash([]); ctx.strokeStyle = C.link; ctx.lineWidth = Math.max(1.5, w*.35);
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.quadraticCurveTo(mx,my,bx,by); ctx.stroke();
+      ctx.lineCap="butt";
+      // 列車:沿線來回,關聯越強車越多
+      const q = (u)=>[(1-u)*(1-u)*ax+2*(1-u)*u*mx+u*u*bx, (1-u)*(1-u)*ay+2*(1-u)*u*my+u*u*by];
+      const trains = 1 + Math.round(k);
+      for (let n=0;n<trains;n++){
+        let u = reduce ? .5 : ((t/6000 + n/trains + i*.17) % 2); if (u>1) u = 2-u;
+        u = .08 + u*.84;
+        const [x1,y1]=q(u), [x2,y2]=q(Math.min(1,u+.04));
+        const ang=Math.atan2(y2-y1,x2-x1), L=TH*1.1, H2=TH*.42;
+        ctx.save(); ctx.translate(x1,y1-TH*.12); ctx.rotate(ang);
+        ctx.fillStyle=C.link; ctx.beginPath(); ctx.roundRect(-L/2,-H2/2,L,H2,H2/2); ctx.fill();
+        ctx.fillStyle="rgba(255,255,255,.75)";
+        for (const wx of [-L*.22, 0, L*.22]) ctx.fillRect(wx-L*.07,-H2*.22,L*.14,H2*.3);
+        ctx.restore();
+      }
+    });
+    // 車站
+    const used = new Set();
+    links.forEach(l=>{
+      if (focusD!==null && l.i!==focusD && l.j!==focusD) return;
+      used.add(l.i); used.add(l.j);
+    });
+    used.forEach(i=>{
+      const [x,y]=st[i];
+      ctx.fillStyle=C.panel; ctx.strokeStyle=C.link; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(x,y,TH*.32,0,7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=C.link; ctx.font=`700 ${Math.max(9,TH*.32)}px ${F_BODY}`;
+      ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText("M",x,y+.5);
+    });
+  }
+
+  // ---- 法人人流 ----
+  // 外資+投信近 5 日合計:買超 = 人從海岸碼頭走進大樓,賣超 = 人從大樓走出來往海岸去。
+  // 人數(密度)代表張數,5,000 張以上最擠;身上顏色維持紅買綠賣。
+  const crowdLabels = [];
   if ($("flow").checked){
     const cen = layout.bld.map(b=>iso(b.gx+b.s/2, b.gy+b.s/2));
     const cx0 = cen.reduce((a,p)=>a+p[0],0)/cen.length, cy0 = cen.reduce((a,p)=>a+p[1],0)/cen.length;
@@ -545,79 +666,83 @@ function frame(t){
     flows.forEach(f=>{
       const [bx,by] = cen[f.i];
       const dx = Math.cos(f.ang), dy = Math.sin(f.ang)*.5;
-      // 流道外端停在畫布內,留位置給標籤
-      const lim = [dx>0 ? (W-70-bx)/dx : dx<0 ? (70-bx)/dx : 1e9,
-                   dy>0 ? (H-70-by)/dy : dy<0 ? (60-by)/dy : 1e9];
-      const L = Math.max(TW*2, Math.min(...lim));
+      // 沿方向往外走,找到海岸(第一個不是陸地的點)當碼頭
+      let L = TW*.8;
+      while (L < Math.max(W,H) && onLand(bx+dx*L, by+dy*L)) L += TW*.15;
+      L = Math.max(TW*1.6, L + TW*.3);
       const sx = bx + dx*L, sy = by + dy*L;
       const mag = Math.min(1, Math.abs(f.net)/5000);
       const col = f.net>0 ? C.buy : C.sell;
-      // 底線
-      ctx.strokeStyle = col; ctx.globalAlpha = .16; ctx.lineWidth = 3 + mag*7; ctx.lineCap = "round";
+      // 步道
+      ctx.lineCap="round";
+      ctx.strokeStyle = shade(C.sand,-.15); ctx.lineWidth = TH*.75;
       ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(bx,by); ctx.stroke();
-      // 箭頭:買超指向大樓,賣超指向外海
+      ctx.lineCap="butt";
+      // 碼頭
+      ctx.save(); ctx.translate(sx,sy); ctx.rotate(Math.atan2(dy,dx));
+      ctx.fillStyle = shade(C.sand,-.45); ctx.fillRect(-TH*.1,-TH*.35,TH*1.0,TH*.7);
+      ctx.restore();
+      // 人
+      const n = 3 + Math.round(mag*11);
       const into = f.net>0;
-      const ux = (into? bx-sx : sx-bx)/L, uy = (into? by-sy : sy-by)/L;   // 箭頭朝向
-      const step = 24, a0 = reduce ? 0 : (t/45) % step;
-      const sz = 4 + mag*3;
-      ctx.lineWidth = 2 + mag*1.5; ctx.lineJoin = "round";
-      for (let d = a0; d < L; d += step){
-        const pos = into ? d : L - d;            // 從起點量起的距離
-        const px = sx + (bx-sx)*(pos/L), py = sy + (by-sy)*(pos/L);
-        const edge = Math.min(pos, L-pos) / (TW*.9);
-        ctx.globalAlpha = Math.max(0, Math.min(.85, edge*.85));
-        ctx.beginPath();
-        ctx.moveTo(px - ux*sz - uy*sz, py - uy*sz + ux*sz);
-        ctx.lineTo(px, py);
-        ctx.lineTo(px - ux*sz + uy*sz, py - uy*sz - ux*sz);
-        ctx.stroke();
+      const nx = -dy, ny = dx;                     // 垂直方向,讓人群有寬度
+      for (let k=0;k<n;k++){
+        const ph = ((reduce ? .5 : t/(5200 - mag*1600)) + k/n + (k%3)*.07) % 1;
+        const pos = into ? ph : 1-ph;              // 0 = 碼頭, 1 = 大樓門口
+        const lat = (((k*37)%7)/6 - .5) * TH*.6;
+        const x = sx + (bx-sx)*pos + nx*lat, y = sy + (by-sy)*pos + ny*lat;
+        const fade = Math.min(1, Math.min(pos, 1-pos)*6);
+        if (fade<=0) continue;
+        // 面向:買超往大樓走(方向 -dx),賣超往碼頭走(方向 +dx)
+        drawWalker(x, y, into ? -dx : dx, col, fade, reduce ? 0 : t/140 + k*1.7, k + f.i*3);
       }
-      ctx.lineCap = "butt";
-      // 外海端標籤
-      const txt = `${f.b.name} ${fmt(f.net)} 張`;
-      ctx.font = `700 12px ${F_BODY}`;
-      const tw = ctx.measureText(txt).width + 12;
-      const lx = Math.min(W-tw-6, Math.max(6, sx - tw/2)), ly = Math.min(H-66, Math.max(48, sy - 11));
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = C.panel; ctx.strokeStyle = col; ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.roundRect(lx, ly, tw, 22, 11); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = col; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(txt, lx + tw/2, ly + 11.5);
+      crowdLabels.push({x:sx+dx*TH*1.1, y:sy+dy*TH*1.1, txt:`${f.b.name} ${fmt(f.net)} 張`, col});
     });
-    ctx.globalAlpha = 1;
   }
-  // 街區名牌(地面):放在街區最前方的角落,帶底板
-  layout.cl.forEach((c,i)=>{
-    const p=c.plot, [x,y]=iso(p.x1+1,p.y1+1);
-    const txt = `${"ABCDEF"[i]} 區 ${c.w}%`;
-    ctx.font=`700 ${Math.max(11,Math.min(14,TH*.42))}px ${F_BODY}`;
-    const tw = ctx.measureText(txt).width + 14, th = Math.max(18,Math.min(22,TH*.6));
-    ctx.globalAlpha = (focusD===null || focusD===i) ? 1 : .35;
-    ctx.fillStyle = C["d"+(i%6)]; ctx.strokeStyle = shade(C["d"+(i%6)],-.25); ctx.lineWidth=1;
-    ctx.beginPath(); ctx.roundRect(x-tw/2, y+TH*.25, tw, th, th/2); ctx.fill(); ctx.stroke();
-    ctx.fillStyle=C.ink; ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.fillText(txt, x, y+TH*.25+th/2+.5);
-    ctx.globalAlpha = 1;
-  });
   // 建築
   [...layout.bld].sort((a,b)=>(a.gx+a.gy+a.s)-(b.gx+b.gy+b.s)).forEach(b=>drawBuilding(b,t));
-  // 協作線:相關性 ≥ 0.3 的配對,線寬隨相關性。
-  // 只有「選取那棟」的線標數字,其他線變淡 —— 全部標數字會疊成一團。
+
+  // ---- 空橋:同街區的強關聯(相關性 ≥ 門檻)----
+  // 接在兩棟中較矮那棟的六成高度,越粗代表越同步。拉低門檻,空橋會一座座搭起來。
   if ($("lines").checked){
-    const bs=layout.bld;
+    const thr = +$("thr").value, bs = layout.bld;
     for (let i=0;i<bs.length;i++) for (let j=i+1;j<bs.length;j++){
-      const r = corrOf(bs[i].sym,bs[j].sym); if (r<.3) continue;
-      if (focusD!==null && (bs[i].district!==focusD || bs[j].district!==focusD)) continue;
-      const mine = selected && (bs[i]===selected || bs[j]===selected);
-      const [ax,ay]=roofPoint(bs[i]), [bx,by]=roofPoint(bs[j]);
-      const mx=(ax+bx)/2, my=Math.min(ay,by)-TH*(1.2+r*2);
-      ctx.strokeStyle=C.link; ctx.lineWidth=1+r*5;
-      ctx.globalAlpha = selected ? (mine ? .35+r*.6 : .12) : .2+r*.5;
-      ctx.setLineDash([6,5]); ctx.lineDashOffset = reduce?0:-t/60;
-      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.quadraticCurveTo(mx,my,bx,by); ctx.stroke();
-      ctx.setLineDash([]); ctx.globalAlpha=1;
+      const a=bs[i], c=bs[j];
+      if (a.district!==c.district) continue;
+      const r = corrOf(a.sym,c.sym); if (r<thr) continue;
+      if (focusD!==null && a.district!==focusD) continue;
+      const hb = Math.min(bHeight(a), bHeight(c)) * .6;
+      const [ax,ay] = iso(a.gx+a.s/2, a.gy+a.s/2), [cx,cy] = iso(c.gx+c.s/2, c.gy+c.s/2);
+      const th = TH*(.22 + Math.max(0,r-.3)*.45);
+      const mine = selected && (a===selected || c===selected);
+      ctx.globalAlpha = selected && !mine ? .55 : 1;
+      // 橋身(玻璃)+ 頂緣
+      ctx.fillStyle = shade(C.link, .55); ctx.strokeStyle = shade(C.link, -.1); ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay-hb); ctx.lineTo(cx, cy-hb); ctx.lineTo(cx, cy-hb+th); ctx.lineTo(ax, ay-hb+th);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = mine ? C.signal : C.link; ctx.lineWidth = mine ? 3 : 2;
+      ctx.beginPath(); ctx.moveTo(ax, ay-hb); ctx.lineTo(cx, cy-hb); ctx.stroke();
+      // 窗格
+      ctx.fillStyle = "rgba(255,255,255,.6)";
+      const segs = Math.max(2, Math.round(Math.hypot(cx-ax, cy-ay)/(TH*.7)));
+      for (let k=1;k<segs;k++){
+        const u=k/segs, x=ax+(cx-ax)*u, y=ay+(cy-ay)*u-hb;
+        ctx.fillRect(x-1, y+th*.25, 2, th*.5);
+      }
+      ctx.globalAlpha = 1;
     }
   }
+  // 碼頭端標籤(最後畫,不被大樓蓋住)
+  crowdLabels.forEach(l=>{
+    ctx.font = `700 12px ${F_BODY}`;
+    const tw = ctx.measureText(l.txt).width + 12;
+    const lx = Math.min(W-tw-6, Math.max(6, l.x - tw/2)), ly = Math.min(H-66, Math.max(48, l.y - 11));
+    ctx.fillStyle = C.panel; ctx.strokeStyle = l.col; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.roundRect(lx, ly, tw, 22, 11); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = l.col; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(l.txt, lx + tw/2, ly + 11.5);
+  });
   // 天氣
   if (kind==="sun"){
     const g=ctx.createRadialGradient(W-50,40,4,W-50,40,160);
@@ -702,10 +827,11 @@ function renderLegend(){
   <details><summary>其他元素</summary><ul>
     ${li("▮","樓高與佔地","這檔市值佔整個組合的比例。越高的樓出事,對組合影響越大。權重 15% 以上佔 2×2 格、40% 以上佔 3×3 格。樓高以開根號換算,大部位不會衝出畫面。用市值計算,所以股價漲跌也會讓樓變高變矮,不必有買賣")}
     ${li("▦","街區","報酬相關性超過門檻就歸同一區,與產業無關。地上標示該區合計權重")}
-    ${li("⌒","協作線","報酬相關性 0.3 以上的兩檔之間拉線,越粗代表越常同漲同跌。點選一棟樓時,它的線會變亮,確切數字在「個股」分頁")}
-    ${li(`<i class="sw" style="display:block;background:var(--buy)"></i>`,"法人洋流:紅色 = 買超","外資加投信近 5 日合計買超,箭頭指向大樓")}
-    ${li(`<i class="sw" style="display:block;background:var(--sell)"></i>`,"法人洋流:綠色 = 賣超","外資加投信近 5 日合計賣超,箭頭指向外海")}
-    <li><span class="ic"></span><span>粗細代表張數,5,000 張以上最粗。外海端標示個股與合計張數。外資與投信方向相反時會互相抵銷,各自的數字在「個股」分頁。</span></li>
+    ${li("🌉","空橋","同一街區、相關性超過街區門檻的兩棟樓之間搭空橋,代表幾乎一起動。越粗越同步。拉低門檻,空橋會一座座搭起來")}
+    ${li("Ⓜ","捷運","不同街區之間,只要有任一組持股相關性 0.3 以上就通車,代表有一定連動但還算不同區。線越粗、車越多,關聯越強")}
+    ${li(`<i class="sw" style="display:block;background:var(--buy)"></i>`,"法人人流:紅衣 = 買超","外資加投信近 5 日合計買超,人從海岸碼頭走進大樓")}
+    ${li(`<i class="sw" style="display:block;background:var(--sell)"></i>`,"法人人流:綠衣 = 賣超","外資加投信近 5 日合計賣超,人從大樓走出來往碼頭去")}
+    <li><span class="ic"></span><span>人越多越擠代表張數越多,5,000 張以上最擠。碼頭端標示個股與合計張數。外資與投信方向相反時會互相抵銷,各自的數字在「個股」分頁。</span></li>
   </ul></details>`;
   $("log").innerHTML = DATA.log.map(([d,s],i)=>`<li><button data-i="${i}"><time>${d}</time>${s}</button></li>`).join("");
   $("more").textContent = `全部 ${DATA.log.length} 則 →`;
@@ -744,7 +870,7 @@ function renderDetail(b){
     <p class="eyebrow" style="margin-top:14px">最常一起動的持股</p>
     <ul class="peers">${peers.map(([h,r])=>`<li><span style="width:6.5em">${h.name}</span>
       <span class="bar"><i style="width:${Math.max(0,r)*100}%"></i></span><span class="v">${r.toFixed(2)}</span></li>`).join("")}</ul>
-    <p class="hint" style="margin-top:4px">近一年日報酬的相關係數。1 = 完全同漲同跌，0 = 無關。地圖上的協作線粗細就是這個數字。</p>`;
+    <p class="hint" style="margin-top:4px">近一年日報酬的相關係數。1 = 完全同漲同跌，0 = 無關。同街區超過門檻的會以空橋相連,跨街區 0.3 以上的以捷運相連。</p>`;
 }
 
 // ===== 互動 =====

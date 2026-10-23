@@ -1,0 +1,822 @@
+<title>持股島</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 版面:左側島嶼畫布為主角,右側是海圖式的說明欄;手機時上下堆疊 */
+:root{
+  --paper:#EDF1EC; --panel:#F8FAF6; --ink:#1E2A29; --muted:#5E6E6B; --line:#CBD6D1;
+  --sea:#8FC0C3; --sea-deep:#6FA6AB; --sand:#E7DDBF; --grass:#BFD4A6; --plot:#D7E3C6;
+  --signal:#D9A21B; --link:#2C6E7A;
+  --d0:#F2D7B3; --d1:#C9DAF0; --d2:#E4CDE6; --d3:#CDE8C2; --d4:#F1E7A8; --d5:#BFE3DD;
+  --buy:#D2403A; --sell:#23905A;
+  --up:#4E9A63; --hot:#E06A3B; --pull:#4A7FC1; --down:#C8454A; --bounce:#E09A3B; --mid:#97A3A0; --unknown:#D6B83A;
+  --f-display:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;
+  --f-body:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;
+  --f-data:"IBM Plex Mono","Microsoft JhengHei","PingFang TC","Noto Sans TC",monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --paper:#121A1B; --panel:#182223; --ink:#E4ECE8; --muted:#93A4A0; --line:#2C3B3C;
+  --sea:#1F4A52; --sea-deep:#163A41; --sand:#5B5640; --grass:#3E5A3C; --plot:#4A6447;
+  --signal:#E8B931; --link:#7CC4CF;
+  --d0:#6E5638; --d1:#3C5275; --d2:#5E4466; --d3:#3F6140; --d4:#6A6233; --d5:#2F625C;
+  --buy:#F0605A; --sell:#3DB775;
+  --up:#5FB777; --hot:#F07E4E; --pull:#6C9FE0; --down:#E0605F; --bounce:#EFAE52; --mid:#7D8A87; --unknown:#E0C54A;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#121A1B; --panel:#182223; --ink:#E4ECE8; --muted:#93A4A0; --line:#2C3B3C;
+  --sea:#1F4A52; --sea-deep:#163A41; --sand:#5B5640; --grass:#3E5A3C; --plot:#4A6447;
+  --signal:#E8B931; --link:#7CC4CF;
+  --d0:#6E5638; --d1:#3C5275; --d2:#5E4466; --d3:#3F6140; --d4:#6A6233; --d5:#2F625C;
+  --buy:#F0605A; --sell:#3DB775;
+  --up:#5FB777; --hot:#F07E4E; --pull:#6C9FE0; --down:#E0605F; --bounce:#EFAE52; --mid:#7D8A87; --unknown:#E0C54A;
+  color-scheme:dark}
+[hidden]{display:none!important}
+body{background:var(--paper);color:var(--ink);font-family:var(--f-body);line-height:1.6;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 32px}
+.wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
+h1{font-family:var(--f-display);font-size:2rem;font-weight:700;margin:0;letter-spacing:.04em}
+.sample{font-size:.75rem;border:1px dashed var(--muted);color:var(--muted);padding:1px 8px;border-radius:999px;letter-spacing:.06em}
+.verdict{font-family:var(--f-display);font-size:1.1rem;font-weight:500;margin:0;text-wrap:balance}
+.verdict b{color:var(--link)}
+.main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
+@media (max-width:860px){.main{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;min-width:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--sea)}
+canvas{display:block;width:100%;height:auto;cursor:pointer;touch-action:manipulation}
+.wx{position:absolute;left:12px;top:10px;font-size:.8rem;background:var(--panel);border:1px solid var(--line);padding:3px 10px;border-radius:999px;font-family:var(--f-data)}
+.fs{position:absolute;right:12px;top:10px;font:inherit;font-size:.8rem;background:var(--panel);color:var(--ink);
+  border:1px solid var(--line);padding:3px 12px;border-radius:999px;cursor:pointer}
+.fs:hover{border-color:var(--link);color:var(--link)}
+.fs:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+/* 全螢幕時:地圖與右欄一起放大,不限最大寬度 */
+:root:fullscreen{background:var(--paper);overflow:auto}
+:root:fullscreen .wrap{max-width:none}
+:root:fullscreen .main{grid-template-columns:minmax(0,1fr) 360px}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;font-size:.85rem;color:var(--muted)}
+.controls label{display:flex;align-items:center;gap:6px}
+select,input[type=range]{accent-color:var(--link);font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+input[type=checkbox]{accent-color:var(--link)}
+aside{display:flex;flex-direction:column;gap:12px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h2{font-family:var(--f-display);font-size:1.1rem;font-weight:700;margin:0 0 6px}
+.eyebrow{font-size:.7rem;letter-spacing:.14em;color:var(--muted);text-transform:uppercase;margin:0 0 4px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:.85rem}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--f-data);font-variant-numeric:tabular-nums}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:.8rem;padding:1px 9px;border-radius:999px;border:1px solid var(--line)}
+.dot{width:9px;height:9px;border-radius:2px;display:inline-block;flex:none}
+.meaning{font-size:.85rem;color:var(--muted);margin:6px 0 0}
+.districts{display:flex;flex-direction:column;gap:6px;font-size:.85rem}
+.districts button{all:unset;cursor:pointer;display:flex;flex-direction:column;gap:2px;padding:7px 8px;border-radius:8px;border:1px solid transparent}
+.districts button:hover{background:var(--paper)}
+.districts button[aria-pressed="true"]{border-color:var(--link);background:var(--paper)}
+.districts button:focus-visible{outline:2px solid var(--link)}
+.districts .row{display:flex;gap:8px;align-items:center}
+.districts .w{font-family:var(--f-data);margin-left:auto;font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:.78rem;color:var(--muted)}
+/* 日誌:疊在地圖底部的跑馬燈,展開後往上長出清單 */
+.logbox{position:absolute;left:10px;right:10px;bottom:10px;display:flex;flex-direction:column;gap:6px;
+  bottom:max(10px,env(safe-area-inset-bottom,0px))}
+.ticker{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:6px 8px 6px 10px;font-size:.84rem;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;font-weight:700;color:var(--muted);letter-spacing:.1em;flex:none}
+.live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--hot)}
+.tick{all:unset;cursor:pointer;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tick time,.log time{font-family:var(--f-data);color:var(--muted);margin-right:8px}
+.tick:hover{color:var(--link)}
+.more{all:unset;cursor:pointer;flex:none;font-size:.78rem;color:var(--link);padding:2px 6px;border-radius:6px}
+.more:hover{background:var(--paper)}
+.tick:focus-visible,.more:focus-visible,.log button:focus-visible{outline:2px solid var(--link)}
+.log{list-style:none;margin:0 -8px;padding:0;display:flex;flex-direction:column;gap:2px}
+.log button{all:unset;cursor:pointer;display:block;padding:6px 8px;border-radius:6px;font-size:.84rem;line-height:1.5}
+.log button:hover{background:var(--paper)}
+.hint{font-size:.78rem;color:var(--muted);margin:0}
+.guide{display:flex;flex-direction:column;gap:2px}
+.guide details{border-top:1px solid var(--line);padding:6px 0}
+.guide details:first-child{border-top:0;padding-top:0}
+.guide summary{cursor:pointer;font-family:var(--f-display);font-weight:700;font-size:.95rem;list-style:none;display:flex;justify-content:space-between;align-items:baseline}
+.guide summary::-webkit-details-marker{display:none}
+.guide summary::after{content:"＋";color:var(--muted);font-size:.85rem}
+.guide details[open] summary::after{content:"－"}
+.guide summary:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+.guide ul{list-style:none;margin:6px 0 2px;padding:0;display:flex;flex-direction:column;gap:7px;font-size:.82rem}
+.guide li{display:grid;grid-template-columns:26px 1fr;gap:6px;align-items:start}
+.guide li b{font-weight:600}
+.guide li span{color:var(--muted)}
+.guide .ic{text-align:center;line-height:1.5}
+.guide .sw{width:13px;height:13px;border-radius:3px;margin:4px auto 0}
+.picklab{display:flex;flex-direction:column;gap:4px;font-size:.75rem;color:var(--muted);margin-bottom:12px}
+.picklab select{font-size:.9rem;padding:6px 8px;width:100%}
+.peers{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:3px;font-size:.85rem}
+.peers li{display:flex;align-items:center;gap:8px}
+.peers .bar{flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.peers .bar i{display:block;height:100%;background:var(--link)}
+.peers .v{font-family:var(--f-data);font-variant-numeric:tabular-nums;width:3.2em;text-align:right}
+.fxline{margin:8px 0 0;font-size:.85rem;padding:6px 10px;border-radius:6px;background:var(--paper);border:1px solid var(--line)}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:-4px -4px 12px}
+.tabs button{all:unset;cursor:pointer;flex:1;text-align:center;padding:6px 2px 8px;font-size:.86rem;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected="true"]{color:var(--ink);font-weight:700;border-bottom-color:var(--link)}
+.tabs button:focus-visible{outline:2px solid var(--link);outline-offset:-2px}
+@media (prefers-reduced-motion:reduce){canvas{cursor:default}}
+</style>
+
+<div class="wrap">
+  <header id="hdr">
+    <h1>持股島</h1>
+  </header>
+  <p class="verdict" id="verdict"></p>
+
+  <div class="main">
+    <div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <div class="stage">
+        <canvas id="cv" aria-label="持股島地圖,點建築可看詳細資料"></canvas>
+        <div class="wx" id="wx"></div>
+        <button class="fs" id="fs" type="button">⛶ 全螢幕</button>
+        <div class="logbox" id="logbox">
+          <div class="ticker">
+            <span class="live">最新</span>
+            <button class="tick" id="tick" title="點一下跳到那檔"></button>
+            <button class="more" id="more" aria-controls="p-log"></button>
+          </div>
+        </div>
+      </div>
+      <div class="controls">
+        <label for="regime" id="regimeCtl">大盤天氣
+          <select id="regime">
+            <option value="上升趨勢">上升趨勢 ☀</option>
+            <option value="區間震盪" selected>區間震盪 ⛅</option>
+            <option value="帶寬收縮">帶寬收縮 🌫</option>
+            <option value="下降趨勢">下降趨勢 🌧</option>
+          </select></label>
+        <label for="thr">街區分界：相關性 ≥ <span id="thrv" style="font-family:var(--f-data)">0.40</span>
+          <input id="thr" type="range" min="0.2" max="0.8" step="0.05" value="0.4">
+          <b id="thrOut" style="color:var(--link)"></b></label>
+        <label for="lines"><input id="lines" type="checkbox" checked>協作線</label>
+        <label for="flow"><input id="flow" type="checkbox" checked>法人洋流</label>
+      </div>
+      <p class="hint" id="tip">點一棟樓看個股資訊。試試切換大盤天氣：同一棟德微，大盤多雲時起火，大盤下雨時只是冒煙；台積電在晴天以外才會發金光。拉動街區門檻，看看「分散」在哪個數字瓦解。</p>
+    </div>
+
+    <aside>
+      <section class="card">
+        <div class="tabs" role="tablist">
+          <button role="tab" id="t-log" aria-controls="p-log" aria-selected="true">日誌</button>
+          <button role="tab" id="t-detail" aria-controls="detail" aria-selected="false">個股</button>
+          <button role="tab" id="t-districts" aria-controls="p-districts" aria-selected="false">街區</button>
+          <button role="tab" id="t-legend" aria-controls="p-legend" aria-selected="false">圖說</button>
+        </div>
+        <div id="p-log" role="tabpanel">
+          <p class="hint" style="margin-bottom:6px">點一則事件，會跳到那檔個股。</p>
+          <ul class="log" id="log"></ul>
+        </div>
+        <div id="detail" role="tabpanel" hidden>
+          <label for="pick" class="picklab">選擇個股，或直接點島上的樓
+            <select id="pick"></select></label>
+          <div id="detailBody"></div>
+        </div>
+        <div id="p-districts" role="tabpanel" hidden>
+          <p class="hint" style="margin-bottom:6px">點一個街區，地圖上只亮那一區。再點一次取消。</p>
+          <div class="districts" id="districts"></div>
+        </div>
+        <div id="p-legend" role="tabpanel" hidden>
+          <div class="guide" id="legend"></div>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script>
+// ===== 範例資料(形狀對應 app.py 的 _rows_state + analyze_correlation)=====
+const SAMPLE = {
+  holdings:[
+    {sym:"2603",name:"長榮",ind:"航運",w:26,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:18.2,div:58,f5:-3200,t5:450},
+    {sym:"2330",name:"台積電",ind:"半導體",w:24,regime:"上升趨勢",zone:"偏強區",state:"趨勢延續",pnl:41.5,div:9,f5:5100,t5:820},
+    {sym:"00919",name:"群益精選高息",ind:"高股息ETF",w:16,regime:"區間震盪",zone:"超賣區",state:"區間下緣",pnl:-2.1,div:71,f5:0,t5:0},
+    {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"下降趨勢",zone:"偏強區",state:"跌勢中反彈",pnl:-14.8,div:22,f5:310,t5:-120},
+    {sym:"2395",name:"研華",ind:"電腦週邊",w:12,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:6.4,div:31,f5:-480,t5:60},
+    {sym:"2609",name:"陽明",ind:"航運",w:9,regime:"區間震盪",zone:"超買區",state:"區間上緣",pnl:9.7,div:62,f5:1800,t5:-90},
+  ],
+  corr:{"2603|2609":.82,"2330|3675":.48,"2330|2395":.43,"3675|2395":.39,"2330|00919":.36,
+        "2603|00919":.24,"2395|00919":.21,"3675|00919":.18,"2603|2330":.12,"2609|2330":.10,
+        "2603|3675":.08,"2603|2395":.09,"2609|3675":.06,"2609|2395":.07,"2609|00919":.20},
+  log:[
+    ["10/22","2603 長榮 3 天前死亡交叉，與 0050 同步，屬大盤走勢"],
+    ["10/21","00919 除息 0.72 元，第 12 個交易日收盤填息"],
+    ["10/20","2330 外資連續 5 日買超，合計 +5,100 張"],
+    ["10/10","3675 德微 9 月營收 YoY +43.1%"],
+    ["09/30","2395 研華帶寬收縮結束，轉為區間震盪"],
+  ]
+};
+
+// combine_state() 的含義對照
+// 真實資料由 Python 注入;沒注入時用範例資料
+const INJECTED = /*__ISLAND_DATA__*/null;
+const DATA = INJECTED || SAMPLE;
+const LIVE = !!INJECTED;
+const mktRegime = () => LIVE ? (DATA.market?.regime || "資料不足") : $("regime").value;
+const stateOf = b => STATES[b.state] || ["--mid", b.meaning || ""];
+
+const STATES = {
+  "趨勢延續":["--up","中期與短期同向,走勢健康"],
+  "趨勢加速":["--hot","中期向上且短線過熱,可能鈍化延續,但追高風險高"],
+  "趨勢中回檔":["--pull","中期仍向上,只是短線拉回,這在多頭裡是常態"],
+  "跌勢延續":["--down","中期與短期同向向下"],
+  "跌深":["--down","中期向下且短線超賣,反彈也多屬技術性"],
+  "跌勢中反彈":["--bounce","中期仍向下,短線反彈,反彈訊號在下降趨勢中容易失效"],
+  "區間下緣":["--pull","箱型整理的低點附近,是 KD 反轉訊號較可靠的位置"],
+  "區間上緣":["--bounce","箱型整理的高點附近,是 KD 反轉訊號較可靠的位置"],
+  "區間中段":["--mid","箱型整理的中間,沒有明確位階訊號"],
+  "方向未明":["--unknown","波動壓縮,中短期都測不出方向,常是變盤前夕"],
+};
+const WEATHER = {
+  "上升趨勢":{t:"☀ 0050 上升趨勢",kind:"sun"},
+  "區間震盪":{t:"⛅ 0050 區間震盪",kind:"cloud"},
+  "帶寬收縮":{t:"🌫 0050 帶寬收縮",kind:"fog"},
+  "下降趨勢":{t:"🌧 0050 下降趨勢",kind:"rain"},
+};
+
+// 個股特效:跟大盤對照,只在「有事」時出現
+//   起火 = 個股下降趨勢但大盤沒在下雨(自己的問題),或股息持續性有 ⚠️ 警報
+//   冒煙 = 個股下降趨勢,大盤也在下雨(被大環境拖累)
+//   金光 = 個股上升趨勢,而大盤不是晴天(自己在漲)
+function effectOf(b, mkt){
+  if (b.divWarn) return {k:"fire", why:`股息警報:${b.divWarn}`};
+  if (b.regime==="下降趨勢")
+    return mkt==="下降趨勢"
+      ? {k:"smoke", why:"個股與大盤同步下跌,屬大環境拖累"}
+      : {k:"fire",  why:`大盤是「${mkt}」,這檔卻在下降趨勢,是個股自己的問題`};
+  if (b.regime==="上升趨勢" && mkt!=="上升趨勢")
+    return {k:"gold", why:`大盤是「${mkt}」,這檔仍在上升趨勢,是自己在漲`};
+  return {k:null, why: b.regime===mkt ? "與大盤同一個狀態,跟著大環境走" : "沒有需要特別留意的訊號"};
+}
+const EFFECT_NAME = {fire:"🔥 起火", smoke:"💨 冒煙", gold:"✨ 金光"};
+
+const $ = id => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+const F_BODY = '"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif';
+const F_DATA = '"IBM Plex Mono",monospace';
+let focusD = null;   // 街區分頁點選的街區
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let C = {}; // 讀自 CSS token 的顏色
+function readColors(){
+  const s = getComputedStyle(document.documentElement);
+  ["paper","panel","ink","muted","line","sea","sea-deep","sand","grass","plot","signal","link","buy","sell","d0","d1","d2","d3","d4","d5",
+   "up","hot","pull","down","bounce","mid","unknown"].forEach(k=>C[k]=s.getPropertyValue("--"+k).trim());
+}
+const corrOf = (a,b) => DATA.corr[a+"|"+b] ?? DATA.corr[b+"|"+a] ?? 0;
+
+// ===== 依相關性分群(union-find)=====
+function clusters(thr){
+  const p = {}; DATA.holdings.forEach(h=>p[h.sym]=h.sym);
+  const f = x => p[x]===x ? x : (p[x]=f(p[x]));
+  for (const k in DATA.corr) if (DATA.corr[k]>=thr){ const [a,b]=k.split("|"); p[f(a)]=f(b); }
+  const g = {};
+  DATA.holdings.forEach(h=>(g[f(h.sym)] ??= []).push(h));
+  return Object.values(g).map(m=>({members:m.sort((a,b)=>b.w-a.w), w:Math.round(m.reduce((s,h)=>s+h.w,0)*10)/10}))
+                         .sort((a,b)=>b.w-a.w);
+}
+
+// ===== 版面:格子座標 =====
+const N = 16;
+const SLOTS = [[2,2],[9,2],[2,9],[9,9],[5,12],[12,5]];
+let layout = null;
+function buildLayout(thr){
+  const cl = clusters(thr), bld = [], plots = [];
+  cl.forEach((c,i)=>{
+    const [ox,oy] = SLOTS[i % SLOTS.length];
+    let cx=0, cy=0, rowH=0, maxX=0;
+    c.members.forEach(h=>{
+      const s = h.w >= 40 ? 3 : h.w >= 15 ? 2 : 1;
+      if (cx>0 && cx+s>5){ cx=0; cy+=rowH+1; rowH=0; }
+      bld.push({...h, gx:ox+cx, gy:oy+cy, s, district:i});
+      cx += s+1; rowH = Math.max(rowH,s); maxX = Math.max(maxX,cx-1);
+    });
+    plots.push({x0:ox-1,y0:oy-1,x1:ox+maxX,y1:oy+cy+rowH, idx:i});
+    c.plot = plots[plots.length-1];
+  });
+  // 島:離任何街區 ≤1 格必為陸地,=2 格依雜湊決定,讓海岸線不規則
+  const land = [];
+  const hash = (x,y)=>{ const n=Math.sin(x*127.1+y*311.7)*43758.5; return n-Math.floor(n); };
+  for (let x=-2;x<N+2;x++) for (let y=-2;y<N+2;y++){
+    let d=99, plot=null;
+    plots.forEach(p=>{
+      const dx=Math.max(p.x0-x,0,x-p.x1), dy=Math.max(p.y0-y,0,y-p.y1), dd=Math.max(dx,dy);
+      if (dd<d){d=dd; if(dd===0) plot=p;}
+    });
+    if (d<=1 || (d===2 && hash(x,y)>.45)) land.push({x,y,plot, beach:d>=1});
+  }
+  layout = {cl, bld, land};
+}
+
+// ===== 等角投影 =====
+let TW=56, TH=28, OX=0, OY=0, scale=1;
+const iso = (gx,gy) => [OX+(gx-gy)*TW/2, OY+(gx+gy)*TH/2];
+// ===== 全螢幕(地圖 + 右欄一起)=====
+const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+function fillHeight(){
+  if ((!LIVE && !fsEl()) || innerWidth <= 860) return 0;   // 手機版上下堆疊,不撐滿
+  const col = cv.closest(".stage").parentElement;    // 左欄
+  const top = col.getBoundingClientRect().top + scrollY;
+  const others = col.getBoundingClientRect().height - cv.getBoundingClientRect().height;
+  return innerHeight - top - others - 10;
+}
+function fit(){
+  const w = cv.parentElement.getBoundingClientRect().width;
+  // 以 u(=TW)為單位計算邊界:螢幕 x = X*u,y = Y*u
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  layout.land.forEach(t=>{
+    x0=Math.min(x0,(t.x-t.y-1)/2); x1=Math.max(x1,(t.x-t.y+1)/2);
+    y0=Math.min(y0,(t.x+t.y)/4);   y1=Math.max(y1,(t.x+t.y+2)/4+.2);
+  });
+  const mkt = mktRegime();
+  layout.bld.forEach(b=>{
+    const fx = effectOf(b, mkt).k;
+    y0 = Math.min(y0, (b.gx+b.gy+b.s)/4 - hUnits(b)/2 - (fx ? 1.15 : .55));
+  });
+  const TICKER = 52, TOP = 44;              // 底部跑馬燈、左上天氣標籤的高度
+  const spanX = x1-x0, spanY = y1-y0;
+  let u = w*.97/spanX;
+  // 高度跟著島的實際比例走,不再固定 0.8 倍寬而留下大片海
+  let h = spanY*u + TICKER + TOP;
+  const MAXH = fsEl() ? 4000 : 760;
+  if (h > MAXH){ h = MAXH; u = Math.min(u, (h-TICKER-TOP)/spanY); }
+  // 嵌在 Streamlit 裡時,框的高度是固定的:讓地圖把左欄剩下的高度填滿,
+  // 不在框底留一大片空白(多出的空間是海,島本身由寬度決定大小)
+  const fill = fillHeight();
+  if (fill && fill > h){ h = fill; u = Math.min(w*.97/spanX, (h-TICKER-TOP)/spanY); }
+  h = Math.round(Math.max(380, h));
+  const dpr = devicePixelRatio || 1;
+  cv.width = w*dpr; cv.height = h*dpr; cv.style.height = h+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  TW = u; TH = u/2;
+  OX = w/2 - (x0+x1)/2*u;
+  OY = TOP + (h-TICKER-TOP)/2 - (y0+y1)/2*u;
+  W=w; H=h;
+}
+let W=0,H=0;
+
+function diamond(gx,gy,s,fill,stroke){
+  const [ax,ay]=iso(gx,gy),[bx,by]=iso(gx+s,gy),[cx_,cy_]=iso(gx+s,gy+s),[dx,dy]=iso(gx,gy+s);
+  ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.lineTo(cx_,cy_); ctx.lineTo(dx,dy); ctx.closePath();
+  ctx.fillStyle=fill; ctx.fill(); if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke();}
+}
+function shade(hex,f){
+  const c = hex.replace("#",""); const n=parseInt(c.length===3?c.split("").map(x=>x+x).join(""):c,16);
+  let r=n>>16&255,g=n>>8&255,b=n&255;
+  const m = v => Math.max(0,Math.min(255,Math.round(f<0? v*(1+f) : v+(255-v)*f)));
+  return `rgb(${m(r)},${m(g)},${m(b)})`;
+}
+// 樓高以 TH 為單位;用開根號壓縮,避免單一大部位衝出畫框
+const hUnits = b => 0.9 + 0.62*Math.sqrt(Math.max(b.w,0));
+const bHeight = b => hUnits(b) * TH;
+
+function drawBuilding(b, t){
+  ctx.globalAlpha = (focusD===null || b.district===focusD) ? 1 : .22;
+  const col = C[stateOf(b)[0].slice(2)];
+  const hgt = bHeight(b), s=b.s;
+  const pad = .14;
+  const x0=b.gx+pad, y0=b.gy+pad, z=s-pad*2;
+  const A=iso(x0,y0), B=iso(x0+z,y0), Cc=iso(x0+z,y0+z), D=iso(x0,y0+z);
+  const fx = effectOf(b, mktRegime()).k;
+  const midX = (A[0]+Cc[0])/2, roofY = (A[1]+Cc[1])/2 - hgt;
+  // 金光/火光:建築後方的光暈
+  if (fx==="gold" || fx==="fire"){
+    const pulse = reduce?1:(.8+.2*Math.sin(t/(fx==="fire"?140:600)));
+    const R = TW*(1.1+s*.5)*pulse, cy = roofY + hgt*.45;
+    const g = ctx.createRadialGradient(midX,cy,2,midX,cy,R);
+    const c0 = fx==="gold" ? "rgba(255,214,90,.75)" : "rgba(255,110,40,.6)";
+    g.addColorStop(0,c0); g.addColorStop(1,"rgba(255,180,60,0)");
+    ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(midX,cy,R,R*.85,0,0,7); ctx.fill();
+  }
+  // 陰影
+  ctx.fillStyle="rgba(0,0,0,.12)";
+  ctx.beginPath(); ctx.moveTo(B[0],B[1]); ctx.lineTo(Cc[0],Cc[1]); ctx.lineTo(Cc[0]+TW*.35,Cc[1]-TH*.1); ctx.lineTo(B[0]+TW*.35,B[1]-TH*.1); ctx.closePath(); ctx.fill();
+  // 左面
+  ctx.fillStyle=shade(col,-.28);
+  ctx.beginPath(); ctx.moveTo(D[0],D[1]); ctx.lineTo(Cc[0],Cc[1]); ctx.lineTo(Cc[0],Cc[1]-hgt); ctx.lineTo(D[0],D[1]-hgt); ctx.closePath(); ctx.fill();
+  // 右面
+  ctx.fillStyle=shade(col,-.12);
+  ctx.beginPath(); ctx.moveTo(Cc[0],Cc[1]); ctx.lineTo(B[0],B[1]); ctx.lineTo(B[0],B[1]-hgt); ctx.lineTo(Cc[0],Cc[1]-hgt); ctx.closePath(); ctx.fill();
+  // 窗格
+  ctx.fillStyle="rgba(255,255,255,.22)";
+  const floors = Math.max(2, Math.round(hgt/(TH*.45)));
+  for (let i=1;i<floors;i++){
+    const yy = i*hgt/floors;
+    for (const f of [.3,.65]){
+      const px = Cc[0]+(B[0]-Cc[0])*f, py = Cc[1]+(B[1]-Cc[1])*f - yy;
+      ctx.fillRect(px-1.5, py-TH*.12, 3, TH*.16);
+    }
+  }
+  // 頂面
+  ctx.fillStyle = shade(col,.18);
+  ctx.beginPath(); ctx.moveTo(A[0],A[1]-hgt); ctx.lineTo(B[0],B[1]-hgt); ctx.lineTo(Cc[0],Cc[1]-hgt); ctx.lineTo(D[0],D[1]-hgt); ctx.closePath(); ctx.fill();
+  if (b===selected){ ctx.strokeStyle=C.signal; ctx.lineWidth=2.5; ctx.stroke(); }
+  drawEffect(fx, b, midX, roofY, s, t);
+  // 名牌
+  const top = [(A[0]+Cc[0])/2, (A[1]+Cc[1])/2 - hgt];
+  const bob = reduce?0:Math.sin(t/700 + b.gx)*1.5;
+  const label = `${b.sym} ${b.name}`;
+  ctx.font = `700 ${Math.max(11,Math.min(15,TH*.4))}px ${F_BODY}`;
+  const tw = ctx.measureText(label).width + 12, lh = Math.max(18, Math.min(24, TH*.6));
+  const lx = top[0]-tw/2, ly = top[1]-lh-8+bob - (fx ? TH*1.2 : 0);
+  ctx.fillStyle=C.panel; ctx.strokeStyle=C.line; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(lx,ly,tw,lh,4); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(top[0],ly+lh); ctx.lineTo(top[0],top[1]-2); ctx.strokeStyle=C.muted; ctx.stroke();
+  ctx.fillStyle=C.ink; ctx.textBaseline="middle"; ctx.textAlign="center";
+  ctx.fillText(label, top[0], ly+lh/2+.5);
+  b.hit = {x0:Math.min(D[0],lx), x1:Math.max(B[0],lx+tw), y0:ly, y1:Cc[1]};
+  ctx.globalAlpha = 1;
+  b.roof = top;
+}
+
+function drawEffect(fx, b, x, y, s, t){
+  if (!fx) return;
+  const A0 = ctx.globalAlpha;
+  const T = reduce ? 0 : t;
+  const u = TH;
+  if (fx==="fire"){
+    // 火舌:幾道閃爍的水滴形,外橘內黃
+    const n = 3 + s;
+    for (let i=0;i<n;i++){
+      const ox = (i-(n-1)/2) * u*.55;
+      const h = u*(1.1 + .5*Math.sin(T/110 + i*1.7 + b.gx));
+      for (const [c,k] of [["#E5482B",1],["#F59A2B",.68],["#FFE07A",.38]]){
+        const hh=h*k, ww=u*.32*k + u*.08;
+        ctx.fillStyle=c; ctx.beginPath();
+        ctx.moveTo(x+ox-ww, y);
+        ctx.quadraticCurveTo(x+ox-ww*.9, y-hh*.55, x+ox + Math.sin(T/90+i)*u*.12, y-hh);
+        ctx.quadraticCurveTo(x+ox+ww*.9, y-hh*.55, x+ox+ww, y);
+        ctx.closePath(); ctx.fill();
+      }
+    }
+  }
+  if (fx==="fire" || fx==="smoke"){
+    // 煙:往上飄、逐漸變大變淡的圓
+    const dark = fx==="fire";
+    for (let i=0;i<6;i++){
+      const ph = ((T/2400) + i/6) % 1;
+      const py = y - u*(fx==="fire"?1.2:.4) - ph*u*2.4;
+      const px = x + Math.sin(ph*5 + i + b.gx)*u*.6 + ph*u*1.2;
+      ctx.globalAlpha = A0*(1-ph) * (dark ? .55 : .6);
+      ctx.fillStyle = dark ? "#4B4642" : "#9A9894";
+      ctx.beginPath(); ctx.arc(px, py, u*(.3 + ph*.6), 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = A0;
+  }
+  if (fx==="gold"){
+    // 金色星芒往上漂
+    for (let i=0;i<7;i++){
+      const ph = ((T/2000) + i/7) % 1;
+      const px = x + Math.sin(i*2.3 + b.gx)*u*(1+s*.4);
+      const py = y + u*.6 - ph*u*3.2;
+      const r = u*.22*(1-Math.abs(ph-.5)*1.4);
+      if (r<=0) continue;
+      ctx.globalAlpha = A0*Math.sin(ph*Math.PI);
+      ctx.fillStyle = "#FFD45A";
+      ctx.beginPath();
+      ctx.moveTo(px,py-r*2); ctx.lineTo(px+r*.5,py-r*.5); ctx.lineTo(px+r*2,py);
+      ctx.lineTo(px+r*.5,py+r*.5); ctx.lineTo(px,py+r*2); ctx.lineTo(px-r*.5,py+r*.5);
+      ctx.lineTo(px-r*2,py); ctx.lineTo(px-r*.5,py-r*.5); ctx.closePath(); ctx.fill();
+    }
+    ctx.globalAlpha = A0;
+  }
+}
+
+function roofPoint(b){ return b.roof || iso(b.gx+b.s/2,b.gy+b.s/2); }
+
+// ===== 天氣粒子 =====
+let drops = [];
+function seedDrops(){ drops = Array.from({length:140},()=>({x:Math.random()*W,y:Math.random()*H,v:4+Math.random()*4})); }
+
+let selected = null;
+function frame(t){
+  ctx.clearRect(0,0,W,H);
+  const kind = (WEATHER[mktRegime()]||{kind:"cloud"}).kind;
+  // 海
+  ctx.fillStyle = C.sea; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = shade(C.sea,.18); ctx.lineWidth=1;
+  for (let y=8; y<H; y+=18){
+    ctx.beginPath();
+    for (let x=0;x<=W;x+=12){ const yy = y + Math.sin(x/40 + (reduce?0:t/900) + y)*2.2; x?ctx.lineTo(x,yy):ctx.moveTo(x,yy); }
+    ctx.globalAlpha=.35; ctx.stroke(); ctx.globalAlpha=1;
+  }
+  // 陸地
+  const land = [...layout.land].sort((a,b)=>(a.x+a.y)-(b.x+b.y));
+  land.forEach(tl=>{
+    const [px,py]=iso(tl.x,tl.y+1), [qx,qy]=iso(tl.x+1,tl.y+1), [rx,ry]=iso(tl.x+1,tl.y);
+    ctx.fillStyle = shade(C.sand,-.25);
+    ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(qx,qy); ctx.lineTo(qx,qy+TH*.35); ctx.lineTo(px,py+TH*.35); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = shade(C.sand,-.35);
+    ctx.beginPath(); ctx.moveTo(qx,qy); ctx.lineTo(rx,ry); ctx.lineTo(rx,ry+TH*.35); ctx.lineTo(qx,qy+TH*.35); ctx.closePath(); ctx.fill();
+    const dc = tl.plot ? C["d"+(tl.plot.idx%6)] : null;
+    diamond(tl.x,tl.y,1, dc || (tl.beach? C.sand : C.grass), dc ? shade(dc,-.12) : null);
+  });
+  // 法人洋流:每棟樓一條從外海通往大樓的流道。
+  //   顏色 = 方向(台股慣例:紅 = 外資+投信買超、綠 = 賣超)
+  //   箭頭 = 流向(買超指向大樓、賣超指向外海),靜止時也看得出進出
+  //   粗細 = 張數(5,000 張以上最粗)
+  //   外海端標名稱與張數,不必沿線追是哪一棟
+  // 同街區的樓方向接近,流道會疊在一起,所以把角度攤開,至少相隔約 28°。
+  if ($("flow").checked){
+    const cen = layout.bld.map(b=>iso(b.gx+b.s/2, b.gy+b.s/2));
+    const cx0 = cen.reduce((a,p)=>a+p[0],0)/cen.length, cy0 = cen.reduce((a,p)=>a+p[1],0)/cen.length;
+    const flows = layout.bld.map((b,i)=>({b, i, net:b.f5+b.t5,
+        ang:Math.atan2((cen[i][1]-cy0)*2, cen[i][0]-cx0)}))
+      .filter(f=>f.net && (focusD===null || f.b.district===focusD))
+      .sort((p,q)=>p.ang-q.ang);
+    const GAP = .5;
+    for (let k=1;k<flows.length;k++)
+      if (flows[k].ang - flows[k-1].ang < GAP) flows[k].ang = flows[k-1].ang + GAP;
+    if (flows.length>1 && flows[0].ang + 2*Math.PI - flows[flows.length-1].ang < GAP)
+      flows[flows.length-1].ang = flows[0].ang + 2*Math.PI - GAP;
+    const fmt = n => (n>0?"+":"") + Math.round(n).toLocaleString();
+    flows.forEach(f=>{
+      const [bx,by] = cen[f.i];
+      const dx = Math.cos(f.ang), dy = Math.sin(f.ang)*.5;
+      // 流道外端停在畫布內,留位置給標籤
+      const lim = [dx>0 ? (W-70-bx)/dx : dx<0 ? (70-bx)/dx : 1e9,
+                   dy>0 ? (H-70-by)/dy : dy<0 ? (60-by)/dy : 1e9];
+      const L = Math.max(TW*2, Math.min(...lim));
+      const sx = bx + dx*L, sy = by + dy*L;
+      const mag = Math.min(1, Math.abs(f.net)/5000);
+      const col = f.net>0 ? C.buy : C.sell;
+      // 底線
+      ctx.strokeStyle = col; ctx.globalAlpha = .16; ctx.lineWidth = 3 + mag*7; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(bx,by); ctx.stroke();
+      // 箭頭:買超指向大樓,賣超指向外海
+      const into = f.net>0;
+      const ux = (into? bx-sx : sx-bx)/L, uy = (into? by-sy : sy-by)/L;   // 箭頭朝向
+      const step = 24, a0 = reduce ? 0 : (t/45) % step;
+      const sz = 4 + mag*3;
+      ctx.lineWidth = 2 + mag*1.5; ctx.lineJoin = "round";
+      for (let d = a0; d < L; d += step){
+        const pos = into ? d : L - d;            // 從起點量起的距離
+        const px = sx + (bx-sx)*(pos/L), py = sy + (by-sy)*(pos/L);
+        const edge = Math.min(pos, L-pos) / (TW*.9);
+        ctx.globalAlpha = Math.max(0, Math.min(.85, edge*.85));
+        ctx.beginPath();
+        ctx.moveTo(px - ux*sz - uy*sz, py - uy*sz + ux*sz);
+        ctx.lineTo(px, py);
+        ctx.lineTo(px - ux*sz + uy*sz, py - uy*sz - ux*sz);
+        ctx.stroke();
+      }
+      ctx.lineCap = "butt";
+      // 外海端標籤
+      const txt = `${f.b.name} ${fmt(f.net)} 張`;
+      ctx.font = `700 12px ${F_BODY}`;
+      const tw = ctx.measureText(txt).width + 12;
+      const lx = Math.min(W-tw-6, Math.max(6, sx - tw/2)), ly = Math.min(H-66, Math.max(48, sy - 11));
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = C.panel; ctx.strokeStyle = col; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.roundRect(lx, ly, tw, 22, 11); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = col; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(txt, lx + tw/2, ly + 11.5);
+    });
+    ctx.globalAlpha = 1;
+  }
+  // 街區名牌(地面):放在街區最前方的角落,帶底板
+  layout.cl.forEach((c,i)=>{
+    const p=c.plot, [x,y]=iso(p.x1+1,p.y1+1);
+    const txt = `${"ABCDEF"[i]} 區 ${c.w}%`;
+    ctx.font=`700 ${Math.max(11,Math.min(14,TH*.42))}px ${F_BODY}`;
+    const tw = ctx.measureText(txt).width + 14, th = Math.max(18,Math.min(22,TH*.6));
+    ctx.globalAlpha = (focusD===null || focusD===i) ? 1 : .35;
+    ctx.fillStyle = C["d"+(i%6)]; ctx.strokeStyle = shade(C["d"+(i%6)],-.25); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.roundRect(x-tw/2, y+TH*.25, tw, th, th/2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=C.ink; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(txt, x, y+TH*.25+th/2+.5);
+    ctx.globalAlpha = 1;
+  });
+  // 建築
+  [...layout.bld].sort((a,b)=>(a.gx+a.gy+a.s)-(b.gx+b.gy+b.s)).forEach(b=>drawBuilding(b,t));
+  // 協作線:相關性 ≥ 0.3 的配對,線寬隨相關性。
+  // 只有「選取那棟」的線標數字,其他線變淡 —— 全部標數字會疊成一團。
+  if ($("lines").checked){
+    const bs=layout.bld;
+    for (let i=0;i<bs.length;i++) for (let j=i+1;j<bs.length;j++){
+      const r = corrOf(bs[i].sym,bs[j].sym); if (r<.3) continue;
+      if (focusD!==null && (bs[i].district!==focusD || bs[j].district!==focusD)) continue;
+      const mine = selected && (bs[i]===selected || bs[j]===selected);
+      const [ax,ay]=roofPoint(bs[i]), [bx,by]=roofPoint(bs[j]);
+      const mx=(ax+bx)/2, my=Math.min(ay,by)-TH*(1.2+r*2);
+      ctx.strokeStyle=C.link; ctx.lineWidth=1+r*5;
+      ctx.globalAlpha = selected ? (mine ? .35+r*.6 : .12) : .2+r*.5;
+      ctx.setLineDash([6,5]); ctx.lineDashOffset = reduce?0:-t/60;
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.quadraticCurveTo(mx,my,bx,by); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=1;
+    }
+  }
+  // 天氣
+  if (kind==="sun"){
+    const g=ctx.createRadialGradient(W-50,40,4,W-50,40,160);
+    g.addColorStop(0,"rgba(255,220,120,.55)"); g.addColorStop(1,"rgba(255,220,120,0)");
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  } else if (kind==="cloud"){
+    ctx.fillStyle="rgba(255,255,255,.28)";
+    for (let i=0;i<3;i++){ const x=((reduce?0:t/60)+i*W/3)%(W+200)-100, y=40+i*28;
+      ctx.beginPath(); ctx.ellipse(x,y,70,16,0,0,7); ctx.ellipse(x+40,y-10,46,14,0,0,7); ctx.fill(); }
+  } else if (kind==="fog"){
+    for (let i=0;i<5;i++){ const y=H*(i+.5)/5 + (reduce?0:Math.sin(t/2000+i)*12);
+      const g=ctx.createLinearGradient(0,y-30,0,y+30);
+      g.addColorStop(0,"rgba(230,235,232,0)"); g.addColorStop(.5,"rgba(230,235,232,.45)"); g.addColorStop(1,"rgba(230,235,232,0)");
+      ctx.fillStyle=g; ctx.fillRect(0,y-30,W,60); }
+  } else {
+    ctx.fillStyle="rgba(20,30,45,.18)"; ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle="rgba(200,220,235,.55)"; ctx.lineWidth=1;
+    drops.forEach(d=>{ ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x-2,d.y+9); ctx.stroke();
+      if(!reduce){ d.y+=d.v; d.x-=.6; if(d.y>H){d.y=-10;d.x=Math.random()*W;} } });
+  }
+  if (!reduce) requestAnimationFrame(frame);
+}
+
+// ===== 側欄 =====
+function renderSide(){
+  const thr = +$("thr").value;
+  const nInd = new Set(DATA.holdings.map(h=>h.ind)).size;
+  const cl = layout.cl;
+  const mkt = mktRegime(), fxs = {fire:[],smoke:[],gold:[]};
+  DATA.holdings.forEach(h=>{ const k=effectOf(h,mkt).k; if(k) fxs[k].push(h.name); });
+  const fxTxt = Object.entries(fxs).filter(([,v])=>v.length).map(([k,v])=>`${EFFECT_NAME[k]} ${v.join("、")}`).join("　");
+  const n = DATA.holdings.length, t2 = thr.toFixed(2);
+  let head;
+  if (cl.length === 1)
+    head = `${n} 檔、${nInd} 個產業，在相關性 ${t2} 的門檻下<b>全部是同一個街區</b>，報酬幾乎一起動。`;
+  else if (cl.length === n)
+    head = `${n} 檔各自成一區，在相關性 ${t2} 的門檻下<b>沒有明顯一起動的持股</b>。最大一棟佔 ${cl[0].w}%。`;
+  else if (cl.length < nInd)
+    head = `${n} 檔、${nInd} 個產業，在相關性 ${t2} 的門檻下其實只有 <b>${cl.length} 個街區</b>。最大的街區佔 ${cl[0].w}%。`;
+  else
+    head = `${n} 檔分成 <b>${cl.length} 個街區</b>（相關性門檻 ${t2}），街區數和產業數相當，產業分散大致反映在報酬上。最大的街區佔 ${cl[0].w}%。`;
+  $("thrOut").textContent = `→ ${cl.length} 個街區`;
+  $("verdict").innerHTML = head
+    + `<br><span style="font-size:.95rem;color:var(--muted)">${fxTxt || "島上目前沒有特效，持股都跟著大盤走"}</span>`;
+  $("districts").innerHTML = cl.map((c,i)=>{
+    const inds=[...new Set(c.members.map(m=>m.ind))];
+    return `<button data-d="${i}" aria-pressed="${focusD===i}">
+      <span class="row"><i class="dot" style="background:var(--d${i%6});width:12px;height:12px;border:1px solid var(--line)"></i>
+        <b>${"ABCDEF"[i]} 區</b><span>${c.members.map(m=>m.name).join("、")}</span><span class="w" style="margin-left:auto;font-family:var(--f-data)">${c.w}%</span></span>
+      <span class="hint" style="padding-left:20px">${inds.length>1?`跨 ${inds.length} 個產業:${inds.join("、")},但報酬一起動`:`單一產業:${inds[0]}`}</span>
+    </button>`;
+  }).join("");
+  const wx = WEATHER[mktRegime()] || {t:`0050 ${mktRegime()}`};
+  const sync = DATA.holdings.filter(h=>h.regime===mktRegime()).reduce((s,h)=>s+h.w,0);
+  const syncTxt = Math.round(sync*10)/10;
+  $("wx").textContent = `${wx.t}　與大盤同步 ${syncTxt}%`;
+}
+function renderLegend(){
+  const li = (ic,t,d)=>`<li><span class="ic">${ic}</span><div><b>${t}</b><br><span>${d}</span></div></li>`;
+  const sw = v=>`<i class="sw" style="display:block;background:var(${v})"></i>`;
+  $("legend").innerHTML = `
+  <details open><summary>天氣 = 大盤 0050</summary><ul>
+    ${li("☀","晴天:上升趨勢","20 日均線近 10 個交易日上升 2% 以上")}
+    ${li("⛅","多雲:區間震盪","均線走平,波動正常")}
+    ${li("🌫","起霧:帶寬收縮","均線走平,且波動壓到近一年最低的兩成,方向測不出來")}
+    ${li("🌧","下雨:下降趨勢","20 日均線近 10 個交易日下跌 2% 以上")}
+    <li><span class="ic"></span><span>看的是中期方向,不是當天漲跌。單日跌 1% 只要均線還往上,仍是晴天。</span></li>
+  </ul></details>
+  <details open><summary>大樓特效 = 個股 vs 大盤</summary><ul>
+    ${li("🔥","起火","個股在下降趨勢,但大盤沒在下雨,是這檔自己的問題。股息持續性出現警報(配息靠老本、連續衰退)也會起火。")}
+    ${li("💨","冒煙","個股在下降趨勢,大盤也在下雨,屬大環境拖累")}
+    ${li("✨","金光","個股在上升趨勢,而大盤不是晴天,是自己在漲")}
+    ${li("🏢","無特效","跟著大盤走,或沒有需要留意的訊號")}
+    <li><span class="ic"></span><span>判斷不看你的損益,套牢不會讓樓起火。</span></li>
+  </ul></details>
+  <details><summary>大樓顏色 = 個股合成狀態</summary><ul>
+    ${Object.entries(STATES).map(([k,[v,m]])=>li(sw(v),k,m)).join("")}
+    <li><span class="ic"></span><span>由個股自己的 20 日均線方向(中期)與 KD 位階(短期)合成。</span></li>
+  </ul></details>
+  <details><summary>其他元素</summary><ul>
+    ${li("▮","樓高與佔地","這檔市值佔整個組合的比例。越高的樓出事,對組合影響越大。權重 15% 以上佔 2×2 格、40% 以上佔 3×3 格。樓高以開根號換算,大部位不會衝出畫面。用市值計算,所以股價漲跌也會讓樓變高變矮,不必有買賣")}
+    ${li("▦","街區","報酬相關性超過門檻就歸同一區,與產業無關。地上標示該區合計權重")}
+    ${li("⌒","協作線","報酬相關性 0.3 以上的兩檔之間拉線,越粗代表越常同漲同跌。點選一棟樓時,它的線會變亮,確切數字在「個股」分頁")}
+    ${li(`<i class="sw" style="display:block;background:var(--buy)"></i>`,"法人洋流:紅色 = 買超","外資加投信近 5 日合計買超,箭頭指向大樓")}
+    ${li(`<i class="sw" style="display:block;background:var(--sell)"></i>`,"法人洋流:綠色 = 賣超","外資加投信近 5 日合計賣超,箭頭指向外海")}
+    <li><span class="ic"></span><span>粗細代表張數,5,000 張以上最粗。外海端標示個股與合計張數。外資與投信方向相反時會互相抵銷,各自的數字在「個股」分頁。</span></li>
+  </ul></details>`;
+  $("log").innerHTML = DATA.log.map(([d,s],i)=>`<li><button data-i="${i}"><time>${d}</time>${s}</button></li>`).join("");
+  $("more").textContent = `全部 ${DATA.log.length} 則 →`;
+  showTick();
+}
+function renderPick(){
+  const mkt = mktRegime();
+  $("pick").innerHTML = [...DATA.holdings].sort((a,b)=>b.w-a.w).map(h=>{
+    const k = effectOf(h,mkt).k;
+    return `<option value="${h.sym}">${k?EFFECT_NAME[k].split(" ")[0]+" ":""}${h.sym} ${h.name}　${h.w}%</option>`;
+  }).join("");
+  if (selected) $("pick").value = selected.sym;
+}
+function renderDetail(b){
+  const [v,mean0] = stateOf(b); const mean = b.meaning || mean0;
+  const fmt = n => (n>0?"+":"")+n.toLocaleString();
+  const peers = DATA.holdings.filter(h=>h.sym!==b.sym).map(h=>[h,corrOf(b.sym,h.sym)])
+                .sort((a,c)=>c[1]-a[1]).slice(0,3);
+  $("pick").value = b.sym;
+  $("detailBody").innerHTML = `
+    <p class="eyebrow">${b.ind} · ${"ABCDEF"[b.district]} 區</p>
+    <h2>${b.sym} ${b.name}</h2>
+    <span class="pill"><i class="dot" style="background:var(${v})"></i>${b.state}</span>
+    <p class="meaning">${mean}</p>
+    ${(()=>{const e=effectOf(b,mktRegime());return `<p class="fxline"><b>${e.k?EFFECT_NAME[e.k]:"🏢 無特效"}</b>　${e.why}</p>`;})()}
+    <dl class="kv" style="margin-top:10px">
+      <dt>市值權重</dt><dd>${b.w}%</dd>
+      <dt>中期趨勢</dt><dd>${b.regime}</dd>
+      <dt>短期位階</dt><dd>KD ${b.zone}</dd>
+      <dt>未實現</dt><dd>${fmt(b.pnl)}%</dd>
+      <dt>近3年配息佔報酬</dt><dd>${b.div==null?"—":b.div+"%"}</dd>
+      <dt>外資 5 日</dt><dd style="color:${b.f5>0?"var(--buy)":b.f5<0?"var(--sell)":"inherit"}">${fmt(b.f5)} 張</dd>
+      <dt>投信 5 日</dt><dd style="color:${b.t5>0?"var(--buy)":b.t5<0?"var(--sell)":"inherit"}">${fmt(b.t5)} 張</dd>
+    </dl>
+    <p class="eyebrow" style="margin-top:14px">最常一起動的持股</p>
+    <ul class="peers">${peers.map(([h,r])=>`<li><span style="width:6.5em">${h.name}</span>
+      <span class="bar"><i style="width:${Math.max(0,r)*100}%"></i></span><span class="v">${r.toFixed(2)}</span></li>`).join("")}</ul>
+    <p class="hint" style="margin-top:4px">近一年日報酬的相關係數。1 = 完全同漲同跌，0 = 無關。地圖上的協作線粗細就是這個數字。</p>`;
+}
+
+// ===== 互動 =====
+cv.addEventListener("click", e=>{
+  const r = cv.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+  const hit = [...layout.bld].sort((a,b)=>(b.gx+b.gy)-(a.gx+a.gy)).find(b=>b.hit && x>=b.hit.x0&&x<=b.hit.x1&&y>=b.hit.y0&&y<=b.hit.y1);
+  selected = hit || null;
+  if (hit){ renderDetail(hit); showTab("detail"); }
+  if (reduce) frame(0);
+});
+// ===== 日誌跑馬燈 =====
+const tickI = 0;   // 地圖上只放最新一則
+function showTick(){
+  const [d,s] = DATA.log[tickI % DATA.log.length];
+  $("tick").innerHTML = `<time>${d}</time>${s}`;
+}
+function jumpTo(text){
+  // 事件文字以代號開頭(例:「2603 長榮 …」)→ 選取那棟樓
+  const sym = (text.match(/^(\w+)/)||[])[1];
+  const b = sym && layout.bld.find(x=>x.sym===sym);
+  if (!b) return;
+  selected = b; focusD = null; renderSide(); renderDetail(b); showTab("detail");
+  if (reduce) frame(0);
+}
+$("tick").onclick = ()=>jumpTo(DATA.log[tickI % DATA.log.length][1]);
+$("more").onclick = ()=>showTab("p-log");
+$("log").addEventListener("click", e=>{
+  const b = e.target.closest("button[data-i]"); if (b) jumpTo(DATA.log[+b.dataset.i][1]);
+});
+
+(function(){
+  const root = document.documentElement, btn = $("fs");
+  const can = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+  if (!can){ btn.hidden = true; return; }       // 瀏覽器或嵌入環境不允許時直接隱藏
+  btn.onclick = async ()=>{
+    try {
+      if (fsEl()) await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      else await (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+    } catch (e) { btn.hidden = true; }            // 被拒絕就收起按鈕,不留一顆按了沒反應的鈕
+  };
+  const onChange = ()=>{
+    btn.textContent = fsEl() ? "✕ 結束全螢幕" : "⛶ 全螢幕";
+    requestAnimationFrame(()=>{ fit(); seedDrops(); if (reduce) frame(0); });
+  };
+  document.addEventListener("fullscreenchange", onChange);
+  document.addEventListener("webkitfullscreenchange", onChange);
+})();
+
+function showTab(id){
+  [["detail","t-detail"],["p-districts","t-districts"],["p-log","t-log"],["p-legend","t-legend"]].forEach(([p,t])=>{
+    $(p).hidden = (p!==id); $(t).setAttribute("aria-selected", p===id);
+  });
+}
+$("t-detail").onclick = ()=>showTab("detail");
+$("pick").addEventListener("change", ()=>{
+  const b = layout.bld.find(x=>x.sym===$("pick").value); if (!b) return;
+  selected = b; renderDetail(b); if (reduce) frame(0);
+});
+$("t-districts").onclick = ()=>showTab("p-districts");
+$("t-legend").onclick = ()=>showTab("p-legend");
+$("t-log").onclick = ()=>showTab("p-log");
+$("districts").addEventListener("click", e=>{
+  const btn = e.target.closest("button[data-d]"); if (!btn) return;
+  const d = +btn.dataset.d;
+  focusD = (focusD===d) ? null : d;
+  renderSide(); if (reduce) frame(0);
+});
+function rebuild(){
+  buildLayout(+$("thr").value);
+  if (focusD!==null && focusD>=layout.cl.length) focusD = null;
+  if (selected) selected = layout.bld.find(b=>b.sym===selected.sym);
+  fit(); renderSide(); if (reduce) frame(0);
+}
+$("thr").addEventListener("input", ()=>{ $("thrv").textContent=(+$("thr").value).toFixed(2); rebuild(); });
+["regime","lines","flow"].forEach(id=>$(id).addEventListener("change", ()=>{ fit(); renderSide(); renderPick(); if(selected) renderDetail(selected); if(reduce) frame(0); }));
+addEventListener("resize", ()=>{ fit(); seedDrops(); if(reduce) frame(0); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", ()=>{ readColors(); if(reduce) frame(0); });
+new MutationObserver(()=>{ readColors(); if(reduce) frame(0); }).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+
+if (LIVE){ $("tip").textContent = "點任何一棟樓看個股資訊，日誌點一下會跳到那檔。拉動街區門檻，看看「分散」在哪個數字瓦解。完整說明在右側「圖說」分頁。"; $("regimeCtl").hidden = true;
+  $("hdr").hidden = true; $("verdict").hidden = true;   // 標題與結論句改由 Streamlit 在框外顯示
+  if (DATA.theme) document.documentElement.setAttribute("data-theme", DATA.theme);
+  document.body.style.paddingBlock = "4px 8px"; }
+if (!DATA.log || !DATA.log.length) DATA.log = [["—","近期沒有值得記錄的事件"]];
+readColors(); buildLayout(.4); fit(); seedDrops(); renderSide(); renderLegend(); renderPick();
+selected = layout.bld.find(b=>effectOf(b,mktRegime()).k==="fire") || layout.bld.find(b=>effectOf(b,mktRegime()).k) || layout.bld[0]; renderDetail(selected);
+document.fonts?.ready.then(()=>{ if(reduce) frame(0); });
+requestAnimationFrame(frame);
+</script>

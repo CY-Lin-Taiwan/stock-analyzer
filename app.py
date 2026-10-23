@@ -14,6 +14,7 @@ import ai_analyzer
 import news_fetcher  # Phase 4.5: AI 觀察自動納入新聞
 import metrics  # 進階指標(布林 + KD + regime)
 import price_adjust  # 還原股價(除權息 / 減資)
+import island_component  # 持股島(組合現況視覺化)
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -745,6 +746,138 @@ def _portfolio_states(symbols: tuple):
     return rows, states, zones, fail
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _island_extras(symbols: tuple):
+    """
+    持股島需要、但 _portfolio_states 沒有的逐檔資料,外加島嶼日誌。
+
+    - 法人洋流:外資 / 投信近 5 日買賣超(張)
+    - 起火條件之一:股息持續性的 ⚠️ 警報(配息靠老本、連續衰退)
+    - 日誌:近 5 個交易日內的 KD 交叉(標明是否與大盤同步)、
+            近 30 天的除息、外資連續買賣超 ≥ 5 天
+
+    日誌只用工具裡已經算好的東西,不做新的判斷。
+
+    Returns: (extras: {symbol: {...}}, log: [(date, text), ...])
+    """
+    extras, log = {}, []
+    mkt = load_market_context()
+    today = pd.Timestamp.now().normalize()
+
+    for sym in symbols:
+        ex = {"f5": 0, "t5": 0, "div_warn": None}
+        name = sym
+        try:
+            name = next((s["name"] for s in load_stocks(get_user_id())
+                         if s["symbol"] == sym), sym)
+        except Exception:
+            pass
+
+        # 法人
+        try:
+            cf = load_chips(sym, days=10)
+            if not cf.empty:
+                r5 = cf.tail(5)
+                ex["f5"] = round(float(r5["foreign_net"].sum()) / 1000)
+                ex["t5"] = round(float(r5["trust_net"].sum()) / 1000)
+                last = cf.iloc[-1]["foreign_net"]
+                n = 0
+                for v in reversed(cf["foreign_net"].tolist()):
+                    if v != 0 and (v > 0) == (last > 0):
+                        n += 1
+                    else:
+                        break
+                if n >= 5:
+                    log.append((str(cf.iloc[-1]["date"])[:10],
+                                f"{sym} {name} 外資連續 {n} 天"
+                                f"{'買超' if last > 0 else '賣超'}"))
+        except Exception as e:
+            print(f"[island] 法人 {sym}: {e}")
+
+        # KD 交叉(近 5 個交易日)
+        try:
+            df_adj, _ = load_adjusted_prices(sym)
+            kd = metrics.calculate_kd(df_adj) if len(df_adj) >= 30 else None
+            if (kd and kd.get("cross") in ("golden", "death")
+                    and kd["cross_days_ago"] <= 5):
+                d = str(df_adj.iloc[-1 - kd["cross_days_ago"]]["date"])[:10]
+                nm = "黃金交叉" if kd["cross"] == "golden" else "死亡交叉"
+                sync = (sym != metrics.MARKET_BENCHMARK
+                        and metrics.check_market_sync(kd, mkt)["is_sync"])
+                log.append((d, f"{sym} {name} {nm}(K={kd['cross_level']})"
+                               + (",與 0050 同步,屬大盤走勢" if sync else "")))
+        except Exception as e:
+            print(f"[island] KD {sym}: {e}")
+
+        # 除息(近 30 天)+ 是否已填回
+        try:
+            raw = load_prices(sym)
+            last_close = float(raw[-1]["close"]) if raw else None
+            for a in load_corporate_actions(sym):
+                if a.get("kind") != "除權息":
+                    continue
+                d = pd.Timestamp(str(a["action_date"])[:10])
+                if (today - d).days > 30:
+                    continue
+                gap = float(a["before_price"]) - float(a["reference_price"])
+                if last_close is not None and last_close >= float(a["before_price"]):
+                    tail = ",已收盤填息"
+                elif last_close is not None:
+                    tail = f",距填息還差 {float(a['before_price']) - last_close:.2f} 元"
+                else:
+                    tail = ""
+                log.append((str(d.date()), f"{sym} {name} 除息 {gap:.2f} 元{tail}"))
+        except Exception as e:
+            print(f"[island] 除息 {sym}: {e}")
+
+        # 股息持續性警報(ETF 沒有財報,自然不會觸發)
+        try:
+            r1 = db_retry(lambda: supabase.table("dividends")
+                          .select("ex_date,cash_dividend,stock_dividend")
+                          .eq("symbol", sym).execute(), label="island dividends")
+            r2 = db_retry(lambda: supabase.table("quarterly_financials")
+                          .select("year_quarter,eps")
+                          .eq("symbol", sym).execute(), label="island qfin")
+            if r1 is not None:
+                sus = metrics.calculate_dividend_sustainability(
+                    r1.data or [], (r2.data if r2 is not None else []) or [],
+                    actions=load_corporate_actions(sym))
+                sig = metrics.build_sustainability_signal(sus)
+                if sig.get("must_mention"):
+                    warn = next((l for l in sig["lines"] if "⚠️" in l), "")
+                    ex["div_warn"] = (warn.replace("- ⚠️", "").strip()
+                                      or "股息持續性出現警報")
+        except Exception as e:
+            print(f"[island] 股息持續性 {sym}: {e}")
+
+        extras[sym] = ex
+
+    log.sort(key=lambda x: x[0], reverse=True)
+    return extras, log[:10]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _island_corr(symbols: tuple):
+    """持股報酬相關性(協作線與街區分群用)"""
+    pmap = {}
+    for sym in symbols:
+        try:
+            df_adj, _ = load_adjusted_prices(sym)
+            if not df_adj.empty:
+                pmap[sym] = df_adj["close"]
+        except Exception:
+            pass
+    return metrics.analyze_correlation(pmap)
+
+
+def _streamlit_theme():
+    """讓島的配色跟 Streamlit 的主題一致(舊版 Streamlit 沒有這個 API,回 None)"""
+    try:
+        return st.context.theme.type
+    except Exception:
+        return None
+
+
 def audit_holdings_data(holdings):
     """
     持股資料品質檢查。
@@ -922,7 +1055,8 @@ def page_portfolio_overview():
     # 只放「組合層級才看得到」的東西:大盤環境、我的持股相對它在哪。
     # 刻意不評分 —— 集中或分散、配息多寡都取決於使用者的策略,
     # 50% 押一檔可能是深思熟慮的配置,工具不該預設分散才是對的。
-    st.markdown("### 🩺 組合現況")
+    # 「組合現況」的標題由持股島自己的標題列取代(島上會寫資料日期與一句結論)。
+    # 只有島畫不出來時,才補回這個標題。
 
     _mkt = load_market_context()
 
@@ -957,6 +1091,7 @@ def page_portfolio_overview():
     # 全部失敗時要說話 —— 先前這段錯誤訊息寫在 if _rows_state 裡面,
     # 於是「什麼都算不出來」時反而完全靜默,只留一個空標題。
     if not _rows_state:
+        st.markdown("### 🩺 組合現況")
         if _state_err:
             st.warning(f"⚠️ 組合現況計算失敗:{_state_err}")
         else:
@@ -980,79 +1115,105 @@ def page_portfolio_overview():
         _wt = {r["symbol"]: r["weight"] for r in _rows_state}
         _name_of = {r["symbol"]: r["name"] for r in _rows_state}
 
-        # --- 三個數字先講結論 ---
-        # 用「權重」不是「檔數」:一檔佔 2% 和一檔佔 50% 影響差 25 倍。
-        _same_w = _same_n = 0
-        if _mkt and _mkt.get("regime_label") in _states:
-            _syms = _states[_mkt["regime_label"]]
-            _same_n = len(_syms)
-            _same_w = sum(_wt.get(x, 0) for x in _syms)
-        _drv = ("大盤主導" if _same_w >= 60
-                else "個股主導" if _same_w <= 40 else "各半")
+        # --- 持股島 ---
+        # 取代原本的「三張小卡 + 持股狀態 + 拆解」。那些區塊在描述持股之間的
+        # 關係與狀態(誰跟大盤同步、誰一起動、誰出了自己的問題),
+        # 這正是圖像比文字強的地方。文字版收進下方摺疊區,
+        # 手機上島太擠或要精確對照數字時仍找得到。
+        _island_ok = True
+        try:
+            _syms_i = tuple(r["symbol"] for r in _rows_state)
+            _ex_i, _log_i = _island_extras(_syms_i)
+            _payload_i = island_component.build_payload(
+                _rows_state, _ex_i, _island_corr(_syms_i), _mkt, _log_i,
+                theme=_streamlit_theme(),
+                asof=load_data_freshness().get("股價/PE"))
+            # 標題與結論句放在框外,當這一區的說明標題
+            _head_i, _fx_i = island_component.summarize(_payload_i)
+            st.markdown("### 🏝️ 持股島")
+            st.markdown(_head_i)
+            st.caption(_fx_i)
+            island_component.render(_payload_i)
+        except Exception as e:
+            _island_ok = False
+            st.markdown("### 🩺 組合現況")
+            print(f"[app] 持股島繪製失敗: {e}", flush=True)
+            st.warning(f"⚠️ 持股島繪製失敗,改顯示文字版:{e}")
 
-        k1, k2, k3 = st.columns(3)
-        k1.metric("大盤狀態",
-                  _mkt.get("regime_label", "—") if _mkt else "無資料",
-                  f"KD {_mkt['k']:.0f}" if _mkt and _mkt.get("k") is not None else None)
-        k2.metric("與大盤同步", f"{_same_w:.0f}%",
-                  f"{_same_n}/{_n} 檔",
-                  help="按市值權重計算,不是按檔數 —— "
-                       "一檔佔 2% 和一檔佔 50% 對組合的影響差很多")
-        k3.metric("漲跌主要來自", _drv,
-                  help="同步權重 ≥60% 為大盤主導(beta),≤40% 為個股主導(alpha)")
+        with st.expander("文字版持股狀態", expanded=not _island_ok):
+            # --- 三個數字先講結論 ---
+            # 用「權重」不是「檔數」:一檔佔 2% 和一檔佔 50% 影響差 25 倍。
+            _same_w = _same_n = 0
+            if _mkt and _mkt.get("regime_label") in _states:
+                _syms = _states[_mkt["regime_label"]]
+                _same_n = len(_syms)
+                _same_w = sum(_wt.get(x, 0) for x in _syms)
+            _drv = ("大盤主導" if _same_w >= 60
+                    else "個股主導" if _same_w <= 40 else "各半")
 
-        # --- 持股狀態:把中期趨勢與短期位階「合成」後呈現 ---
-        # 分開列會看起來互相矛盾(「上升趨勢 67%」但「KD 偏弱 94%」),
-        # 實際上那是兩個不同時間尺度:
-        #   市場狀態 = 20 日均線方向(中期,數週)
-        #   KD 位階  = 現價在最近 9 天區間的位置(短期,數日)
-        # 「上升趨勢 + KD 偏弱」= 中期向上、短線回檔,是多頭裡的常態。
-        # 合成之後才看得出「現在是什麼情況」,而不是兩個打架的標籤。
-        _combined = {}
-        for _r3 in _rows_state:
-            _combined.setdefault(
-                (_r3["state"], _r3["state_icon"], _r3["state_meaning"]), []
-            ).append(_r3["symbol"])
+            k1, k2, k3 = st.columns(3)
+            k1.metric("大盤狀態",
+                      _mkt.get("regime_label", "—") if _mkt else "無資料",
+                      f"KD {_mkt['k']:.0f}" if _mkt and _mkt.get("k") is not None else None)
+            k2.metric("與大盤同步", f"{_same_w:.0f}%",
+                      f"{_same_n}/{_n} 檔",
+                      help="按市值權重計算,不是按檔數 —— "
+                           "一檔佔 2% 和一檔佔 50% 對組合的影響差很多")
+            k3.metric("漲跌主要來自", _drv,
+                      help="同步權重 ≥60% 為大盤主導(beta),≤40% 為個股主導(alpha)")
 
-        # 一個主題一個容器 —— 先前每一項都加框,結果看不出哪些是一組的。
-        # 這裡是兩個主題:「合成判讀」與「構成它的兩個維度」。
-        with st.container(border=True):
-            st.markdown("**持股狀態**　:gray[中期趨勢與短期位階的綜合判讀]")
-            for _idx, ((_lb, _ic, _mn), _v) in enumerate(sorted(
-                    _combined.items(),
-                    key=lambda x: -sum(_wt.get(i, 0) for i in x[1]))):
-                if _idx:
-                    st.markdown("")
-                _w = sum(_wt.get(i, 0) for i in _v)
-                _who = "、".join(f"{x} {_name_of.get(x,'')}" for x in _v)
-                st.markdown(f"{_ic} **{_lb}**　`權重 {_w:.0f}%`　"
-                            f"{len(_v)} 檔　{_who}")
-                st.caption(f"　{_mn}")
+            # --- 持股狀態:把中期趨勢與短期位階「合成」後呈現 ---
+            # 分開列會看起來互相矛盾(「上升趨勢 67%」但「KD 偏弱 94%」),
+            # 實際上那是兩個不同時間尺度:
+            #   市場狀態 = 20 日均線方向(中期,數週)
+            #   KD 位階  = 現價在最近 9 天區間的位置(短期,數日)
+            # 「上升趨勢 + KD 偏弱」= 中期向上、短線回檔,是多頭裡的常態。
+            # 合成之後才看得出「現在是什麼情況」,而不是兩個打架的標籤。
+            _combined = {}
+            for _r3 in _rows_state:
+                _combined.setdefault(
+                    (_r3["state"], _r3["state_icon"], _r3["state_meaning"]), []
+                ).append(_r3["symbol"])
 
-        _TREND_GLOSS = {
-            "上升趨勢": "20 日均線走揚", "下降趨勢": "20 日均線下彎",
-            "區間震盪": "均線走平,價格來回", "帶寬收縮": "波動壓縮到一年低檔"}
-        _KD_GLOSS = {"超賣區": "K < 20", "偏弱區": "K 20~50",
-                     "偏強區": "K 50~80", "超買區": "K > 80"}
+            # 一個主題一個容器 —— 先前每一項都加框,結果看不出哪些是一組的。
+            # 這裡是兩個主題:「合成判讀」與「構成它的兩個維度」。
+            with st.container(border=True):
+                st.markdown("**持股狀態**　:gray[中期趨勢與短期位階的綜合判讀]")
+                for _idx, ((_lb, _ic, _mn), _v) in enumerate(sorted(
+                        _combined.items(),
+                        key=lambda x: -sum(_wt.get(i, 0) for i in x[1]))):
+                    if _idx:
+                        st.markdown("")
+                    _w = sum(_wt.get(i, 0) for i in _v)
+                    _who = "、".join(f"{x} {_name_of.get(x,'')}" for x in _v)
+                    st.markdown(f"{_ic} **{_lb}**　`權重 {_w:.0f}%`　"
+                                f"{len(_v)} 檔　{_who}")
+                    st.caption(f"　{_mn}")
 
-        with st.container(border=True):
-            st.markdown("**拆解**　:gray[上面的狀態是由這兩個維度合成的]")
-            _d1, _d2 = st.columns(2)
+            _TREND_GLOSS = {
+                "上升趨勢": "20 日均線走揚", "下降趨勢": "20 日均線下彎",
+                "區間震盪": "均線走平,價格來回", "帶寬收縮": "波動壓縮到一年低檔"}
+            _KD_GLOSS = {"超賣區": "K < 20", "偏弱區": "K 20~50",
+                         "偏強區": "K 50~80", "超買區": "K > 80"}
 
-            def _dim(col, title, sub, groups, gloss):
-                with col:
-                    st.markdown(f"**{title}**　:gray[{sub}]")
-                    for _k, _v in sorted(
-                            groups.items(),
-                            key=lambda x: -sum(_wt.get(i, 0) for i in x[1])):
-                        _w = sum(_wt.get(i, 0) for i in _v)
-                        st.markdown(f"　{_k}　`{_w:.0f}%`　"
-                                    f":gray[{gloss.get(_k,'')}]")
-                        st.caption("　　" + "、".join(
-                            _name_of.get(x, x) for x in _v))
+            with st.container(border=True):
+                st.markdown("**拆解**　:gray[上面的狀態是由這兩個維度合成的]")
+                _d1, _d2 = st.columns(2)
 
-            _dim(_d1, "中期趨勢", "20 日均線的方向", _states, _TREND_GLOSS)
-            _dim(_d2, "短期位階", "現價在近 9 日區間的位置", _zones, _KD_GLOSS)
+                def _dim(col, title, sub, groups, gloss):
+                    with col:
+                        st.markdown(f"**{title}**　:gray[{sub}]")
+                        for _k, _v in sorted(
+                                groups.items(),
+                                key=lambda x: -sum(_wt.get(i, 0) for i in x[1])):
+                            _w = sum(_wt.get(i, 0) for i in _v)
+                            st.markdown(f"　{_k}　`{_w:.0f}%`　"
+                                        f":gray[{gloss.get(_k,'')}]")
+                            st.caption("　　" + "、".join(
+                                _name_of.get(x, x) for x in _v))
+
+                _dim(_d1, "中期趨勢", "20 日均線的方向", _states, _TREND_GLOSS)
+                _dim(_d2, "短期位階", "現價在近 9 日區間的位置", _zones, _KD_GLOSS)
 
         if _fail:
             st.caption(f"({_fail} 檔資料不足,未納入統計)")

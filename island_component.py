@@ -6,6 +6,7 @@
   大樓   = 個股;樓高與佔地 = 市值權重,顏色 = combine_state() 的合成狀態
   特效   = 只看短期(幾天到幾週),且跟大盤對照:
            冒煙 = 跌破三線且均線下彎 1~4 天,或大盤也一起走弱
+                  (下彎 = 20 日、60 日線都比 5 天前低,不限幅度)
            起火 = 跌破三線且均線下彎持續 5 天以上,而大盤沒有一起走弱
            金光 = 個股上升趨勢,而大盤不是
            配息等長期體質問題不上島,放在個股分頁的提醒
@@ -99,23 +100,24 @@ def build_payload(
 
 # ===== 破線 =====
 BREAK_FIRE_DAYS = 5         # 破線持續幾個交易日才從冒煙升級成起火
-MA20_DROP_PCT = 2.0         # 20 日線 10 天內至少下跌這個 %,才算「明顯下彎」
-MA60_DROP_PCT = 0.5         # 60 日線 10 天內至少下跌這個 %
-SLOPE_DAYS = 10
+SLOPE_DAYS = 5              # 均線「下彎」= 比 N 個交易日前低(不限幅度)
 
 
 def breakdown_status(close) -> Optional[Dict]:
     """
-    跌破三線且均線明顯下彎,並算出已經持續幾個交易日。
+    跌破三線且均線下彎,並算出已經持續幾個交易日。
 
     條件(每一天都要成立):
       - 收盤低於 5 / 20 / 60 日均線
-      - 20 日線比 10 天前低 2% 以上、60 日線比 10 天前低 0.5% 以上
+      - 20 日線、60 日線都比 5 個交易日前低
     只要有一天不成立(例如站回任一條均線),天數就歸零。
 
-    為什麼「下彎」要有幅度:只寫「比幾天前低」的話,低 0.01% 也算,
-    震盪盤裡隨便一次回檔就成立 —— 模擬顯示沒有任何趨勢的股價
-    也有約兩成的日子會符合,火就失去意義。
+    為什麼「下彎」不要求幅度:曾經要求 20 日線 10 天跌 2% 以上,
+    結果台達電 2026/10 從 2050 跌到 1510(−26%),20 日線卻被
+    10 月初的急漲撐住,一直沒達到門檻,連冒煙都沒有。
+    「先急漲、再急殺」正是均線反應最慢的型態,幅度門檻會漏掉它。
+    雜訊交給「連續 5 天才起火」處理 —— 模擬顯示這才是降低假警報的
+    主力,幅度門檻只多擋掉一點,卻會漏掉真正的案例。
 
     Args:
         close: 還原收盤價序列(pandas Series,舊到新)
@@ -127,8 +129,8 @@ def breakdown_status(close) -> Optional[Dict]:
         c = close.astype(float).reset_index(drop=True)
         ma5, ma20, ma60 = c.rolling(5).mean(), c.rolling(20).mean(), c.rolling(60).mean()
         cond = ((c < ma5) & (c < ma20) & (c < ma60)
-                & ((ma20 / ma20.shift(SLOPE_DAYS) - 1) * 100 <= -MA20_DROP_PCT)
-                & ((ma60 / ma60.shift(SLOPE_DAYS) - 1) * 100 <= -MA60_DROP_PCT))
+                & (ma20 < ma20.shift(SLOPE_DAYS))
+                & (ma60 < ma60.shift(SLOPE_DAYS)))
         days = 0
         for v in reversed(cond.tolist()):
             if v:
@@ -140,7 +142,7 @@ def breakdown_status(close) -> Optional[Dict]:
         return {"days": days,
                 "text": (f"收盤 {c.iloc[-1]:,.2f} 跌破 5 日線 {ma5.iloc[-1]:,.2f}、"
                          f"20 日線 {ma20.iloc[-1]:,.2f}、60 日線 {ma60.iloc[-1]:,.2f},"
-                         f"均線明顯下彎")}
+                         f"均線下彎")}
     except Exception:
         return None
 

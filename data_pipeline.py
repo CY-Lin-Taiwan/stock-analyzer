@@ -788,7 +788,9 @@ def sync_symbol_light(symbol: str, days_back: int = 30):
 
     time.sleep(0.4)
     try:
-        chips = fetch_institutional(symbol, start_date)
+        # 原本呼叫 fetch_institutional(),但檔案裡沒有這個函式(正確名稱是 fetch_chips),
+        # 每次都 NameError 被吞掉 → 日更從來沒有更新法人資料
+        chips = fetch_chips(symbol, start_date)
         if not chips.empty:
             print(f"  [法人] 寫入 {upsert_chips(chips)} 筆")
         else:

@@ -160,7 +160,7 @@ aside{display:flex;flex-direction:column;gap:12px;min-width:0}
         <label for="lines"><input id="lines" type="checkbox" checked>空橋與捷運</label>
         <label for="flow"><input id="flow" type="checkbox" checked>法人人流</label>
       </div>
-      <p class="hint" id="tip">點一棟樓看個股資訊。試試切換大盤天氣：同一棟德微，大盤多雲時起火，大盤下雨時只是冒煙；台積電在晴天以外才會發金光。拉動街區門檻，看看「分散」在哪個數字瓦解。</p>
+      <p class="hint" id="tip">點一棟樓看個股資訊。試試切換大盤天氣：德微破線 7 天，大盤多雲時起火、大盤下雨時只是冒煙；研華才破線第 2 天，只會冒煙；台積電在晴天以外才會發金光。拉動街區門檻，看看「分散」在哪個數字瓦解。</p>
     </div>
 
     <aside>
@@ -198,9 +198,9 @@ const SAMPLE = {
   holdings:[
     {sym:"2603",name:"長榮",ind:"航運",w:26,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:18.2,div:58,f5:-3200,t5:450},
     {sym:"2330",name:"台積電",ind:"半導體",w:24,regime:"上升趨勢",zone:"偏強區",state:"趨勢延續",pnl:41.5,div:9,f5:5100,t5:820},
-    {sym:"00919",name:"群益精選高息",ind:"高股息ETF",w:16,regime:"區間震盪",zone:"超賣區",state:"區間下緣",pnl:-2.1,div:71,f5:0,t5:0},
-    {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"下降趨勢",zone:"偏強區",state:"跌勢中反彈",pnl:-14.8,div:22,f5:310,t5:-120},
-    {sym:"2395",name:"研華",ind:"電腦週邊",w:12,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:6.4,div:31,f5:-480,t5:60,divWarn:"配息已連續 2 年下滑"},
+    {sym:"00919",name:"群益精選高息",ind:"高股息ETF",w:16,regime:"區間震盪",zone:"超賣區",state:"區間下緣",pnl:-2.1,div:71,f5:0,t5:0,kind:"high_div",divNote:"近 3 年股價 -12.4%,含息才 +8.1%,賺股息、賠價差"},
+    {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"下降趨勢",zone:"偏弱區",state:"跌勢延續",pnl:-14.8,div:22,f5:310,t5:-120,brk:{days:7,text:"收盤 268.50 跌破 5 日線 275.30、20 日線 301.20、60 日線 312.80,均線明顯下彎"}},
+    {sym:"2395",name:"研華",ind:"電腦週邊",w:12,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:6.4,div:31,f5:-480,t5:60,divNote:"配息已連續 2 年下滑",brk:{days:2,text:"收盤 412.00 跌破 5 日線 420.40、20 日線 438.10、60 日線 445.60,均線明顯下彎"}},
     {sym:"2609",name:"陽明",ind:"航運",w:9,regime:"區間震盪",zone:"超買區",state:"區間上緣",pnl:9.7,div:62,f5:1800,t5:-90},
   ],
   corr:{"2603|2609":.82,"2330|3675":.48,"2330|2395":.43,"3675|2395":.39,"2330|00919":.36,
@@ -242,27 +242,32 @@ const WEATHER = {
   "下降趨勢":{t:"🌧 0050 下降趨勢",kind:"rain"},
 };
 
-// 個股特效:跟大盤對照,只在「有事」時出現
-//   起火 = 個股下降趨勢但大盤沒在下雨(自己的問題),或股息持續性有 ⚠️ 警報
-//   冒煙 = 個股下降趨勢,大盤也在下雨(被大環境拖累)
-//   金光 = 個股上升趨勢,而大盤不是晴天(自己在漲)
-// 配息型 = 近 3 年配息佔總報酬 ≥ 40%(與個股頁「股價為主 / 雙引擎」的分界一致)。
-// 配息警報只對配息型起火;價差型的配息變化不影響投資邏輯,只在個股分頁提醒。
-const DIV_TYPE_PCT = 40;
-const isDivType = b => b.div!=null && b.div >= DIV_TYPE_PCT;
-const divIssue = b => [b.divWarn, b.erosion].filter(Boolean).join("；");
+// 個股特效:只看短期(幾天到幾週),且跟大盤對照。與 island_component._effect() 同一套規則。
+//   冒煙 = 跌破三線且均線明顯下彎 1~4 天,或大盤(0050)也在走弱
+//   起火 = 跌破三線且均線明顯下彎持續 5 天以上,而大盤沒有一起走弱
+//   金光 = 個股上升趨勢,而大盤不是
+// 配息等長期體質問題不上島,只在個股分頁提醒。
+// ETF 依類型處理:市值型不起火;債券不跟大盤比;槓桿/反向不套用特效。
+const FIRE_DAYS = () => DATA.fireDays || 5;
+const KIND_NAME = {market:"市值型 ETF", high_div:"高股息 ETF", theme:"主題型 ETF",
+                   active:"主動式 ETF", bond:"債券 ETF", leverage:"槓桿/反向 ETF"};
+const mktWeak = mkt => !!DATA.market?.breakdown || mkt==="下降趨勢";
 function effectOf(b, mkt){
-  if (isDivType(b) && divIssue(b))
-    return {k:"fire", why:`配息型(配息佔報酬 ${b.div}%),而${divIssue(b)}`};
-  if (b.breakdown)
-    return DATA.market?.breakdown
-      ? {k:"smoke", why:`${b.breakdown}。但 0050 也同樣破線,屬全市場下跌`}
-      : {k:"fire",  why:`${b.breakdown},而 0050 沒有破線,是個股自己的問題`};
-  if (b.regime==="下降趨勢")
-    return mkt==="下降趨勢"
-      ? {k:"smoke", why:"個股與大盤同步下跌,屬大環境拖累"}
-      : {k:"fire",  why:`大盤是「${mkt}」,這檔卻在下降趨勢,是個股自己的問題`};
-  if (b.regime==="上升趨勢" && mkt!=="上升趨勢")
+  const kind = b.kind || "stock", n = FIRE_DAYS();
+  if (kind==="leverage")
+    return {k:null, why:"槓桿/反向 ETF 本來就放大或反著大盤走,不套用特效"};
+  if (b.brk){
+    const d = b.brk.days, base = `${b.brk.text}(第 ${d} 天)`;
+    if (kind==="market")
+      return {k:"smoke", why:`${base}。市值型 ETF 本身就是大盤,只會冒煙`};
+    if (kind!=="bond" && mktWeak(mkt))
+      return {k:"smoke", why:`${base}。但 0050 也在走弱,屬大環境拖累`};
+    if (d >= n)
+      return {k:"fire", why:`${base},已持續 ${n} 天以上`
+                + (kind==="bond" ? "" : ",而 0050 沒有一起走弱,是這檔自己的問題")};
+    return {k:"smoke", why:`${base}。再 ${n-d} 天未站回任一條均線就會起火`};
+  }
+  if (["stock","high_div","theme","active"].includes(kind) && b.regime==="上升趨勢" && mkt!=="上升趨勢")
     return {k:"gold", why:`大盤是「${mkt}」,這檔仍在上升趨勢,是自己在漲`};
   return {k:null, why: b.regime===mkt ? "與大盤同一個狀態,跟著大環境走" : "沒有需要特別留意的訊號"};
 }
@@ -819,13 +824,12 @@ function renderLegend(){
     <li><span class="ic"></span><span>看的是中期方向,不是當天漲跌。單日跌 1% 只要均線還往上,仍是晴天。</span></li>
   </ul></details>
   <details open><summary>大樓特效 = 個股 vs 大盤</summary><ul>
-    ${li("🔥","起火(破線)","收盤同時跌破 5、20、60 日均線,且 20 日與 60 日均線都比 5 天前低,而 0050 沒有同樣破線。反應比下降趨勢快,急跌時會先抓到")}
-    ${li("🔥","起火(趨勢)","個股在下降趨勢,但大盤沒在下雨,是這檔自己的問題。")}
-    ${li("🔥","起火(配息型)","配息佔近 3 年報酬 40% 以上的持股,出現配息靠老本、配息連續衰退,或「賺股息、賠價差」時也會起火。價差型持股的配息變化只在個股分頁提醒,不起火。")}
-    ${li("💨","冒煙","個股破線或在下降趨勢,但 0050 也一樣,屬大環境拖累")}
+    ${li("💨","冒煙","收盤跌破 5、20、60 日均線,而且 20 日線 10 天內跌 2% 以上、60 日線也在往下,持續 1~4 天。或者 0050 也在走弱(破線或下降趨勢),屬大環境拖累")}
+    ${li("🔥","起火","同樣的破線狀態持續 5 個交易日以上,而 0050 沒有一起走弱,是這檔自己的問題。只要有一天站回任一條均線,天數就重新計算")}
     ${li("✨","金光","個股在上升趨勢,而大盤不是晴天,是自己在漲")}
     ${li("🏢","無特效","跟著大盤走,或沒有需要留意的訊號")}
-    <li><span class="ic"></span><span>判斷不看你的損益,套牢不會讓樓起火。</span></li>
+    <li><span class="ic"></span><span>特效只看最近幾天到幾週的變化,而且不看你的損益。配息連續下滑、賺股息賠價差這類長期狀況,放在「個股」分頁的配息提醒。</span></li>
+    <li><span class="ic"></span><span>ETF 依類型處理:市值型(如 0050)本身就是大盤,最多冒煙;債券 ETF 不跟股市比,只看自己破線;槓桿與反向 ETF 不套用特效。</span></li>
   </ul></details>
   <details><summary>大樓顏色 = 個股合成狀態</summary><ul>
     ${Object.entries(STATES).map(([k,[v,m]])=>li(sw(v),k,m)).join("")}
@@ -883,12 +887,12 @@ function renderDetail(b){
   $("pick").value = b.sym;
   renderFlowTag();
   $("detailBody").innerHTML = `
-    <p class="eyebrow">${b.ind} · ${"ABCDEF"[b.district]} 區</p>
+    <p class="eyebrow">${KIND_NAME[b.kind] ? KIND_NAME[b.kind]+" · " : ""}${b.ind} · ${"ABCDEF"[b.district]} 區</p>
     <h2>${b.sym} ${b.name}</h2>
     <span class="pill"><i class="dot" style="background:var(${v})"></i>${b.state}</span>
     <p class="meaning">${mean}</p>
     ${(()=>{const e=effectOf(b,mktRegime());return `<p class="fxline"><b>${e.k?EFFECT_NAME[e.k]:"🏢 無特效"}</b>　${e.why}</p>`;})()}
-    ${(!isDivType(b) && divIssue(b)) ? `<p class="fxline" style="background:transparent"><b>ℹ️ 配息提醒</b>　${divIssue(b)}。這檔配息只佔報酬 ${b.div==null?"—":b.div+"%"},屬價差型,所以不起火。</p>` : ""}
+    ${b.divNote ? `<p class="fxline" style="background:transparent"><b>ℹ️ 配息提醒</b>　${b.divNote}。這是長期體質的狀況,不影響島上的特效,細節請看個股頁的股息品質。</p>` : ""}
     <dl class="kv" style="margin-top:10px">
       <dt>市值權重</dt><dd>${b.w}%</dd>
       <dt>中期趨勢</dt><dd>${b.regime}</dd>

@@ -1681,6 +1681,7 @@ def calculate_dividend_sustainability(
     try:
         # --- 依 ex_date 年份彙總配息 ---
         by_year: Dict[int, float] = {}
+        pay_count: Dict[int, int] = {}
         for d in dividends:
             ex = str(d.get("ex_date") or "")[:10]
             if len(ex) < 4 or not ex[:4].isdigit():
@@ -1689,6 +1690,17 @@ def calculate_dividend_sustainability(
             if cash <= 0:
                 continue
             by_year[int(ex[:4])] = by_year.get(int(ex[:4]), 0.0) + cash
+            pay_count[int(ex[:4])] = pay_count.get(int(ex[:4]), 0) + 1
+
+        # 今年還沒發完的配息不能算成一個完整年度。
+        # 季配 ETF 在 10 月只領了 3 次、半年配的公司可能只領了 1 次,
+        # 合計看起來比去年少,就會被誤判成「配息連續下滑」。
+        # 判斷方式:今年的配息次數少於去年 → 視為未完成,整年排除。
+        # (年配的公司今年已除息就是 1 對 1,不會被排除)
+        from datetime import date as _date
+        _cur = _date.today().year
+        if _cur in by_year and pay_count.get(_cur, 0) < pay_count.get(_cur - 1, 0):
+            by_year.pop(_cur)
 
         if not by_year:
             return None

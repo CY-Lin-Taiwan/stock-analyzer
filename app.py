@@ -797,7 +797,7 @@ def _island_extras(symbols: tuple):
         # KD 交叉(近 5 個交易日)
         try:
             df_adj, _ = load_adjusted_prices(sym)
-            ex["breakdown"] = island_component.ma_breakdown(df_adj["close"]) if not df_adj.empty else None
+            ex["breakdown"] = island_component.breakdown_status(df_adj["close"]) if not df_adj.empty else None
             kd = metrics.calculate_kd(df_adj) if len(df_adj) >= 30 else None
             if (kd and kd.get("cross") in ("golden", "death")
                     and kd["cross_days_ago"] <= 5):
@@ -831,8 +831,8 @@ def _island_extras(symbols: tuple):
         except Exception as e:
             print(f"[island] 除息 {sym}: {e}")
 
-        # 賺股息、賠價差:近 3 年股價下跌,靠配息才轉正。
-        # 只有配息型持股會因此起火(判斷在 island_component / 模板裡)。
+        # 賺股息、賠價差:近 3 年股價跌超過 10%,靠配息才轉正。
+        # 屬長期體質問題,只在島上的個股分頁提醒,不影響起火。
         try:
             _raw = pd.DataFrame(load_prices(sym))
             _adj, _ = load_adjusted_prices(sym)
@@ -840,7 +840,7 @@ def _island_extras(symbols: tuple):
                 _raw["date"] = pd.to_datetime(_raw["date"])
                 _raw = _raw.sort_values("date").reset_index(drop=True)
                 _tr = metrics.calculate_total_return(_adj["close"], _raw["close"], years=3)
-                if _tr and _tr["price_return_pct"] <= 0 < _tr["total_return_pct"]:
+                if _tr and _tr["price_return_pct"] <= -10 and _tr["total_return_pct"] > 0:
                     ex["erosion"] = (f"近 {_tr['years']} 年股價 {_tr['price_return_pct']:+.1f}%,"
                                      f"含息才 {_tr['total_return_pct']:+.1f}%,賺股息、賠價差")
         except Exception as e:
@@ -874,10 +874,10 @@ def _island_extras(symbols: tuple):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _market_breakdown():
-    """大盤基準是否也跌破三線下彎(是的話,個股破線只算冒煙)"""
+    """大盤基準是否也跌破三線且均線下彎(是的話,個股破線只算冒煙)"""
     try:
         df_m, _ = load_adjusted_prices(metrics.MARKET_BENCHMARK)
-        return bool(island_component.ma_breakdown(df_m["close"])) if not df_m.empty else False
+        return bool(island_component.breakdown_status(df_m["close"])) if not df_m.empty else False
     except Exception:
         return False
 

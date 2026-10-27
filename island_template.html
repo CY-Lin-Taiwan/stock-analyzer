@@ -8,8 +8,12 @@
   --paper:#EDF1EC; --panel:#F8FAF6; --ink:#1E2A29; --muted:#5E6E6B; --line:#CBD6D1;
   --sea:#8FC0C3; --sea-deep:#6FA6AB; --sand:#E7DDBF; --grass:#BFD4A6; --plot:#D7E3C6;
   --signal:#D9A21B; --link:#2C6E7A;
-  --d0:#F2D7B3; --d1:#C9DAF0; --d2:#E4CDE6; --d3:#CDE8C2; --d4:#F1E7A8; --d5:#BFE3DD;
+  --d0:#EBDDBF; --d1:#C9DAF0; --d2:#DED1EC; --d3:#CFD6E4; --d4:#F0E6B4; --d5:#C3DEE6;
   --buy:#D2403A; --sell:#23905A;
+  /* 狀態色(台股慣例):色系 = 中期方向(紅上、綠下、灰區間),深淺 = 短期是否同向 */
+  --su2:#A8232B; --su1:#D64F49; --su0:#EBA19B;
+  --sd2:#1E6A44; --sd1:#2E9160; --sd0:#93CDAD;
+  --srh:#BBA7A3; --srm:#A7AAA8; --srl:#9AAEA4; --sq:#D8C176;
   --up:#4E9A63; --hot:#E06A3B; --pull:#4A7FC1; --down:#C8454A; --bounce:#E09A3B; --mid:#97A3A0; --unknown:#D6B83A;
   --f-display:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;
   --f-body:"Microsoft JhengHei","PingFang TC","Noto Sans TC",sans-serif;
@@ -19,16 +23,22 @@
   --paper:#121A1B; --panel:#182223; --ink:#E4ECE8; --muted:#93A4A0; --line:#2C3B3C;
   --sea:#1F4A52; --sea-deep:#163A41; --sand:#5B5640; --grass:#3E5A3C; --plot:#4A6447;
   --signal:#E8B931; --link:#7CC4CF;
-  --d0:#6E5638; --d1:#3C5275; --d2:#5E4466; --d3:#3F6140; --d4:#6A6233; --d5:#2F625C;
+  --d0:#665A3E; --d1:#3C5275; --d2:#54476A; --d3:#46506A; --d4:#6A6233; --d5:#2F5866;
   --buy:#F0605A; --sell:#3DB775;
+  --su2:#E0525A; --su1:#EE7B74; --su0:#F2B3AD;
+  --sd2:#3FAF78; --sd1:#5CC48F; --sd0:#A3DABB;
+  --srh:#B39F9B; --srm:#9AA09D; --srl:#90A69B; --sq:#D9C27A;
   --up:#5FB777; --hot:#F07E4E; --pull:#6C9FE0; --down:#E0605F; --bounce:#EFAE52; --mid:#7D8A87; --unknown:#E0C54A;
   color-scheme:dark}}
 :root[data-theme="dark"]{
   --paper:#121A1B; --panel:#182223; --ink:#E4ECE8; --muted:#93A4A0; --line:#2C3B3C;
   --sea:#1F4A52; --sea-deep:#163A41; --sand:#5B5640; --grass:#3E5A3C; --plot:#4A6447;
   --signal:#E8B931; --link:#7CC4CF;
-  --d0:#6E5638; --d1:#3C5275; --d2:#5E4466; --d3:#3F6140; --d4:#6A6233; --d5:#2F625C;
+  --d0:#665A3E; --d1:#3C5275; --d2:#54476A; --d3:#46506A; --d4:#6A6233; --d5:#2F5866;
   --buy:#F0605A; --sell:#3DB775;
+  --su2:#E0525A; --su1:#EE7B74; --su0:#F2B3AD;
+  --sd2:#3FAF78; --sd1:#5CC48F; --sd0:#A3DABB;
+  --srh:#B39F9B; --srm:#9AA09D; --srl:#90A69B; --sq:#D9C27A;
   --up:#5FB777; --hot:#F07E4E; --pull:#6C9FE0; --down:#E0605F; --bounce:#EFAE52; --mid:#7D8A87; --unknown:#E0C54A;
   color-scheme:dark}
 [hidden]{display:none!important}
@@ -199,7 +209,7 @@ const SAMPLE = {
     {sym:"2603",name:"長榮",ind:"航運",w:26,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:18.2,div:58,f5:-3200,t5:450},
     {sym:"2330",name:"台積電",ind:"半導體",w:24,regime:"上升趨勢",zone:"偏強區",state:"趨勢延續",pnl:41.5,div:9,f5:5100,t5:820},
     {sym:"00919",name:"群益精選高息",ind:"高股息ETF",w:16,regime:"區間震盪",zone:"超賣區",state:"區間下緣",pnl:-2.1,div:71,f5:0,t5:0,kind:"high_div",divNote:"近 3 年股價 -12.4%,含息才 +8.1%,賺股息、賠價差"},
-    {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"下降趨勢",zone:"偏弱區",state:"跌勢延續",pnl:-14.8,div:22,f5:310,t5:-120,brk:{days:2,crash:true,drop_pct:-23.5,high:351.0,text:"收盤 268.50 跌破 5 日線 275.30、20 日線 301.20、60 日線 312.80,20 天內從高點 351.00 跌了 24%"}},
+    {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"上升趨勢",zone:"超賣區",state:"趨勢中回檔",below3:true,pnl:-14.8,div:22,f5:310,t5:-120,brk:{days:2,crash:true,drop_pct:-23.5,high:351.0,text:"收盤 268.50 跌破 5 日線 275.30、20 日線 301.20、60 日線 312.80,20 天內從高點 351.00 跌了 24%"}},
     {sym:"2395",name:"研華",ind:"電腦週邊",w:12,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:6.4,div:31,f5:-480,t5:60,divNote:"配息已連續 2 年下滑",brk:{days:2,text:"收盤 412.00 跌破 5 日線 420.40、20 日線 438.10、60 日線 445.60,均線下彎"}},
     {sym:"2609",name:"陽明",ind:"航運",w:9,regime:"區間震盪",zone:"超買區",state:"區間上緣",pnl:9.7,div:62,f5:1800,t5:-90},
   ],
@@ -221,19 +231,24 @@ const INJECTED = /*__ISLAND_DATA__*/null;
 const DATA = INJECTED || SAMPLE;
 const LIVE = !!INJECTED;
 const mktRegime = () => LIVE ? (DATA.market?.regime || "資料不足") : $("regime").value;
-const stateOf = b => STATES[b.state] || ["--mid", b.meaning || ""];
+// 跌破 5/20/60 日三條均線時,不沿用「中期趨勢 × KD」的合成狀態:
+// 中期趨勢看 20 日線斜率,急漲後急跌時會落後好幾週,
+// 股價已經破三線,卻還顯示藍色「趨勢中回檔」,跟火的訊息互相矛盾。
+const BELOW3 = ["--sd1", "股價已跌破 5、20、60 日均線。中期趨勢指標(20 日線斜率)反應較慢,可能還顯示上升或區間,以股價實際位置為準"];
+const stateName = b => b.below3 ? "跌破三線" : b.state;
+const stateOf = b => b.below3 ? BELOW3 : (STATES[b.state] || ["--srm", b.meaning || ""]);
 
 const STATES = {
-  "趨勢延續":["--up","中期與短期同向,走勢健康"],
-  "趨勢加速":["--hot","中期向上且短線過熱,可能鈍化延續,但追高風險高"],
-  "趨勢中回檔":["--pull","中期仍向上,只是短線拉回,這在多頭裡是常態"],
-  "跌勢延續":["--down","中期與短期同向向下"],
-  "跌深":["--down","中期向下且短線超賣,反彈也多屬技術性"],
-  "跌勢中反彈":["--bounce","中期仍向下,短線反彈,反彈訊號在下降趨勢中容易失效"],
-  "區間下緣":["--pull","箱型整理的低點附近,是 KD 反轉訊號較可靠的位置"],
-  "區間上緣":["--bounce","箱型整理的高點附近,是 KD 反轉訊號較可靠的位置"],
-  "區間中段":["--mid","箱型整理的中間,沒有明確位階訊號"],
-  "方向未明":["--unknown","波動壓縮,中短期都測不出方向,常是變盤前夕"],
+  "趨勢加速":["--su2","中期向上且短線過熱,可能鈍化延續,但追高風險高"],
+  "趨勢延續":["--su1","中期與短期同向往上,走勢健康"],
+  "趨勢中回檔":["--su0","中期仍向上,只是短線拉回,這在多頭裡是常態"],
+  "跌深":["--sd2","中期向下且短線超賣,反彈也多屬技術性"],
+  "跌勢延續":["--sd1","中期與短期同向往下"],
+  "跌勢中反彈":["--sd0","中期仍向下,短線反彈,反彈訊號在下降趨勢中容易失效"],
+  "區間上緣":["--srh","箱型整理的高點附近,是 KD 反轉訊號較可靠的位置"],
+  "區間中段":["--srm","箱型整理的中間,沒有明確位階訊號"],
+  "區間下緣":["--srl","箱型整理的低點附近,是 KD 反轉訊號較可靠的位置"],
+  "方向未明":["--sq","波動壓縮,中短期都測不出方向,常是變盤前夕"],
 };
 const WEATHER = {
   "上升趨勢":{t:"☀ 0050 上升趨勢",kind:"sun"},
@@ -286,7 +301,7 @@ const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let C = {}; // 讀自 CSS token 的顏色
 function readColors(){
   const s = getComputedStyle(document.documentElement);
-  ["paper","panel","ink","muted","line","sea","sea-deep","sand","grass","plot","signal","link","buy","sell","d0","d1","d2","d3","d4","d5",
+  ["paper","panel","ink","muted","line","sea","sea-deep","sand","grass","plot","signal","link","buy","sell","su2","su1","su0","sd2","sd1","sd0","srh","srm","srl","sq","d0","d1","d2","d3","d4","d5",
    "up","hot","pull","down","bounce","mid","unknown"].forEach(k=>C[k]=s.getPropertyValue("--"+k).trim());
 }
 const corrOf = (a,b) => DATA.corr[a+"|"+b] ?? DATA.corr[b+"|"+a] ?? 0;
@@ -837,6 +852,8 @@ function renderLegend(){
     <li><span class="ic"></span><span>ETF 依類型處理:市值型(如 0050)本身就是大盤,最多冒煙;債券 ETF 不跟股市比,只看自己破線;槓桿與反向 ETF 不套用特效。</span></li>
   </ul></details>
   <details><summary>大樓顏色 = 個股合成狀態</summary><ul>
+    <li><span class="ic"></span><span>整座島統一用台股慣例:<b>紅色系 = 中期往上、綠色系 = 中期往下、灰色系 = 區間整理</b>。顏色越深,代表短期也同方向;越淺,代表短期正在逆向(回檔或反彈)。人流同樣是紅色買超、綠色賣超。</span></li>
+    ${li(sw("--sd1"),"跌破三線",BELOW3[1]+"。只要收盤跌破三條均線,就優先顯示這個狀態")}
     ${Object.entries(STATES).map(([k,[v,m]])=>li(sw(v),k,m)).join("")}
     <li><span class="ic"></span><span>由個股自己的 20 日均線方向(中期)與 KD 位階(短期)合成。</span></li>
   </ul></details>
@@ -885,7 +902,7 @@ function renderPick(){
   if (selected) $("pick").value = selected.sym;
 }
 function renderDetail(b){
-  const [v,mean0] = stateOf(b); const mean = b.meaning || mean0;
+  const [v,mean0] = stateOf(b); const mean = b.below3 ? mean0 : (b.meaning || mean0);
   const fmt = n => (n>0?"+":"")+n.toLocaleString();
   const peers = DATA.holdings.filter(h=>h.sym!==b.sym).map(h=>[h,corrOf(b.sym,h.sym)])
                 .sort((a,c)=>c[1]-a[1]).slice(0,3);
@@ -894,7 +911,7 @@ function renderDetail(b){
   $("detailBody").innerHTML = `
     <p class="eyebrow">${KIND_NAME[b.kind] ? KIND_NAME[b.kind]+" · " : ""}${b.ind} · ${"ABCDEF"[b.district]} 區</p>
     <h2>${b.sym} ${b.name}</h2>
-    <span class="pill"><i class="dot" style="background:var(${v})"></i>${b.state}</span>
+    <span class="pill"><i class="dot" style="background:var(${v})"></i>${stateName(b)}</span>${b.below3 && b.state ? `<span class="hint" style="margin-left:6px">(原合成狀態:${b.state})</span>` : ""}
     <p class="meaning">${mean}</p>
     ${(()=>{const e=effectOf(b,mktRegime());return `<p class="fxline"><b>${e.k?EFFECT_NAME[e.k]:"🏢 無特效"}</b>　${e.why}</p>`;})()}
     ${b.divNote ? `<p class="fxline" style="background:transparent"><b>ℹ️ 配息提醒</b>　${b.divNote}。這是長期體質的狀況,不影響島上的特效,細節請看個股頁的股息品質。</p>` : ""}

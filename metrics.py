@@ -2293,6 +2293,9 @@ def combine_state(regime_label: str, zone_label: str) -> Dict:
     合成之後才看得出「現在是什麼情況」,而不是兩個打架的標籤。
 
     Returns: {"label", "meaning", "icon"}
+
+    圖示與持股島一致,採台股慣例:紅 = 中期往上、綠 = 中期往下、白 = 區間、黃 = 方向未明;
+    方塊(🟥🟩)= 短期也同向且偏極端。不使用 🔥 —— 島上的火代表「出問題」,意思相反。
     """
     up = regime_label == "上升趨勢"
     down = regime_label == "下降趨勢"
@@ -2307,29 +2310,29 @@ def combine_state(regime_label: str, zone_label: str) -> Dict:
         return {"label": "方向未明", "icon": "🟡",
                 "meaning": "波動壓縮,中短期都測不出方向,常是變盤前夕"}
     if up and extreme_high:
-        return {"label": "趨勢加速", "icon": "🔥",
+        return {"label": "趨勢加速", "icon": "🟥",
                 "meaning": "中期向上且短線過熱,可能鈍化延續,但追高風險高"}
     if up and strong:
-        return {"label": "趨勢延續", "icon": "🟢",
+        return {"label": "趨勢延續", "icon": "🔴",
                 "meaning": "中期與短期同向,走勢健康"}
     if up and weak:
-        return {"label": "趨勢中回檔", "icon": "🔵",
+        return {"label": "趨勢中回檔", "icon": "🔴",
                 "meaning": ("中期仍向上,只是短線拉回 —— "
                             "這在多頭裡是常態,不代表趨勢轉弱")}
     if down and extreme_low:
-        return {"label": "跌深", "icon": "🔴",
+        return {"label": "跌深", "icon": "🟩",
                 "meaning": "中期向下且短線超賣,反彈也多屬技術性"}
     if down and weak:
-        return {"label": "跌勢延續", "icon": "🔴",
+        return {"label": "跌勢延續", "icon": "🟢",
                 "meaning": "中期與短期同向向下"}
     if down and strong:
-        return {"label": "跌勢中反彈", "icon": "🟠",
+        return {"label": "跌勢中反彈", "icon": "🟢",
                 "meaning": "中期仍向下,短線反彈 —— 反彈訊號在下降趨勢中容易失效"}
     if rng and extreme_low:
-        return {"label": "區間下緣", "icon": "🔵",
+        return {"label": "區間下緣", "icon": "⚪",
                 "meaning": "箱型整理的低點附近,是 KD 反轉訊號較可靠的位置"}
     if rng and extreme_high:
-        return {"label": "區間上緣", "icon": "🟠",
+        return {"label": "區間上緣", "icon": "⚪",
                 "meaning": "箱型整理的高點附近,是 KD 反轉訊號較可靠的位置"}
     if rng:
         return {"label": "區間中段", "icon": "⚪",

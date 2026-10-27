@@ -81,6 +81,8 @@ def build_payload(
             "brk": ex.get("breakdown"),
             # 收盤是否站在 20 日線上:金光要求股價本身還站得住
             "above20": ex.get("above20"),
+            # 跌破三線時,大樓顏色不沿用落後的合成狀態
+            "below3": bool(ex.get("below3")),
         })
     holdings.sort(key=lambda h: -h["w"])
 
@@ -153,6 +155,19 @@ def breakdown_status(close) -> Optional[Dict]:
                 else f"{base},均線下彎")
         return {"days": days, "crash": crash, "drop_pct": round(drop, 1),
                 "high": round(high, 2), "text": text}
+    except Exception:
+        return None
+
+
+def below_three(close) -> Optional[bool]:
+    """收盤是否同時低於 5 / 20 / 60 日線(大樓顏色改成「跌破三線」用)"""
+    try:
+        c = close.astype(float)
+        if len(c) < 60:
+            return None
+        x = float(c.iloc[-1])
+        return bool(x < c.rolling(5).mean().iloc[-1] and x < c.rolling(20).mean().iloc[-1]
+                    and x < c.rolling(60).mean().iloc[-1])
     except Exception:
         return None
 

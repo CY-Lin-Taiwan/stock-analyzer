@@ -160,7 +160,7 @@ aside{display:flex;flex-direction:column;gap:12px;min-width:0}
         <label for="lines"><input id="lines" type="checkbox" checked>空橋與捷運</label>
         <label for="flow"><input id="flow" type="checkbox" checked>法人人流</label>
       </div>
-      <p class="hint" id="tip">點一棟樓看個股資訊。試試切換大盤天氣：德微破線 7 天，大盤多雲時起火、大盤下雨時只是冒煙；研華才破線第 2 天，只會冒煙；台積電在晴天以外才會發金光。拉動街區門檻，看看「分散」在哪個數字瓦解。</p>
+      <p class="hint" id="tip">點一棟樓看個股資訊。試試切換大盤天氣：德微 20 天內跌了兩成又跌破三線，大盤多雲時直接起火、大盤下雨時只是冒煙；研華才破線第 2 天，只會冒煙；台積電在晴天以外才會發金光。拉動街區門檻，看看「分散」在哪個數字瓦解。</p>
     </div>
 
     <aside>
@@ -199,7 +199,7 @@ const SAMPLE = {
     {sym:"2603",name:"長榮",ind:"航運",w:26,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:18.2,div:58,f5:-3200,t5:450},
     {sym:"2330",name:"台積電",ind:"半導體",w:24,regime:"上升趨勢",zone:"偏強區",state:"趨勢延續",pnl:41.5,div:9,f5:5100,t5:820},
     {sym:"00919",name:"群益精選高息",ind:"高股息ETF",w:16,regime:"區間震盪",zone:"超賣區",state:"區間下緣",pnl:-2.1,div:71,f5:0,t5:0,kind:"high_div",divNote:"近 3 年股價 -12.4%,含息才 +8.1%,賺股息、賠價差"},
-    {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"下降趨勢",zone:"偏弱區",state:"跌勢延續",pnl:-14.8,div:22,f5:310,t5:-120,brk:{days:7,text:"收盤 268.50 跌破 5 日線 275.30、20 日線 301.20、60 日線 312.80,均線下彎"}},
+    {sym:"3675",name:"德微",ind:"功率元件",w:13,regime:"下降趨勢",zone:"偏弱區",state:"跌勢延續",pnl:-14.8,div:22,f5:310,t5:-120,brk:{days:2,crash:true,drop_pct:-23.5,high:351.0,text:"收盤 268.50 跌破 5 日線 275.30、20 日線 301.20、60 日線 312.80,20 天內從高點 351.00 跌了 24%"}},
     {sym:"2395",name:"研華",ind:"電腦週邊",w:12,regime:"區間震盪",zone:"偏弱區",state:"區間中段",pnl:6.4,div:31,f5:-480,t5:60,divNote:"配息已連續 2 年下滑",brk:{days:2,text:"收盤 412.00 跌破 5 日線 420.40、20 日線 438.10、60 日線 445.60,均線下彎"}},
     {sym:"2609",name:"陽明",ind:"航運",w:9,regime:"區間震盪",zone:"超買區",state:"區間上緣",pnl:9.7,div:62,f5:1800,t5:-90},
   ],
@@ -257,17 +257,21 @@ function effectOf(b, mkt){
   if (kind==="leverage")
     return {k:null, why:"槓桿/反向 ETF 本來就放大或反著大盤走,不套用特效"};
   if (b.brk){
-    const d = b.brk.days, base = `${b.brk.text}(第 ${d} 天)`;
+    const d = b.brk.days, base = `${b.brk.text}(破線第 ${d} 天)`;
     if (kind==="market")
       return {k:"smoke", why:`${base}。市值型 ETF 本身就是大盤,只會冒煙`};
     if (kind!=="bond" && mktWeak(mkt))
       return {k:"smoke", why:`${base}。但 0050 也在走弱,屬大環境拖累`};
+    if (b.brk.crash)
+      return {k:"fire", why:`${b.brk.text},跌得又快又深,直接起火`
+                + (kind==="bond" ? "" : "。0050 沒有一起走弱,是這檔自己的問題")};
     if (d >= n)
       return {k:"fire", why:`${base},已持續 ${n} 天以上`
                 + (kind==="bond" ? "" : ",而 0050 沒有一起走弱,是這檔自己的問題")};
     return {k:"smoke", why:`${base}。再 ${n-d} 天未站回任一條均線就會起火`};
   }
-  if (["stock","high_div","theme","active"].includes(kind) && b.regime==="上升趨勢" && mkt!=="上升趨勢")
+  if (["stock","high_div","theme","active"].includes(kind) && b.regime==="上升趨勢" && mkt!=="上升趨勢"
+      && b.above20 !== false)
     return {k:"gold", why:`大盤是「${mkt}」,這檔仍在上升趨勢,是自己在漲`};
   return {k:null, why: b.regime===mkt ? "與大盤同一個狀態,跟著大環境走" : "沒有需要特別留意的訊號"};
 }
@@ -826,7 +830,8 @@ function renderLegend(){
   <details open><summary>大樓特效 = 個股 vs 大盤</summary><ul>
     ${li("💨","冒煙","收盤跌破 5、20、60 日均線,而且 20 日線與 60 日線都比 5 天前低(往下彎),持續 1~4 天。或者 0050 也在走弱(破線或下降趨勢),屬大環境拖累")}
     ${li("🔥","起火","同樣的破線狀態持續 5 個交易日以上,而 0050 沒有一起走弱,是這檔自己的問題。只要有一天站回任一條均線,天數就重新計算")}
-    ${li("✨","金光","個股在上升趨勢,而大盤不是晴天,是自己在漲")}
+    ${li("🔥","起火(急跌)","跌破三條均線,而且 20 個交易日內從最高點跌了 20% 以上,不用等天數直接起火。跌得又快又深時,均線來不及彎,靠這條先抓到")}
+    ${li("✨","金光","個股在上升趨勢、收盤站在 20 日線上,而大盤不是晴天,是自己在漲。股價已跌破 20 日線的不會發金光")}
     ${li("🏢","無特效","跟著大盤走,或沒有需要留意的訊號")}
     <li><span class="ic"></span><span>特效只看最近幾天到幾週的變化,而且不看你的損益。配息連續下滑、賺股息賠價差這類長期狀況,放在「個股」分頁的配息提醒。</span></li>
     <li><span class="ic"></span><span>ETF 依類型處理:市值型(如 0050)本身就是大盤,最多冒煙;債券 ETF 不跟股市比,只看自己破線;槓桿與反向 ETF 不套用特效。</span></li>

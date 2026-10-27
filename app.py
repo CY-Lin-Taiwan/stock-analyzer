@@ -765,7 +765,8 @@ def _island_extras(symbols: tuple):
     today = pd.Timestamp.now().normalize()
 
     for sym in symbols:
-        ex = {"f5": 0, "t5": 0, "div_warn": None, "erosion": None, "breakdown": None}
+        ex = {"f5": 0, "t5": 0, "div_warn": None, "erosion": None,
+              "breakdown": None, "above20": None}
         name = sym
         try:
             name = next((s["name"] for s in load_stocks(get_user_id())
@@ -798,6 +799,7 @@ def _island_extras(symbols: tuple):
         try:
             df_adj, _ = load_adjusted_prices(sym)
             ex["breakdown"] = island_component.breakdown_status(df_adj["close"]) if not df_adj.empty else None
+            ex["above20"] = island_component.above_ma20(df_adj["close"]) if not df_adj.empty else None
             kd = metrics.calculate_kd(df_adj) if len(df_adj) >= 30 else None
             if (kd and kd.get("cross") in ("golden", "death")
                     and kd["cross_days_ago"] <= 5):

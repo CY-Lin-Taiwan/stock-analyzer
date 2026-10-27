@@ -8,7 +8,8 @@
            冒煙 = 跌破三線且均線下彎 1~4 天,或大盤也一起走弱
                   (下彎 = 20 日、60 日線都比 5 天前低,不限幅度)
            起火 = 跌破三線且均線下彎持續 5 天以上,而大盤沒有一起走弱
-           金光 = 個股上升趨勢,而大盤不是
+           起火也可以走快速通道:跌破三線且 20 天內從高點跌 20% 以上
+           金光 = 個股上升趨勢、收盤站在 20 日線上,而大盤不是
            配息等長期體質問題不上島,放在個股分頁的提醒
   街區   = 報酬相關性超過門檻的持股歸同一區(與產業無關)
   協作線 = 相關性 ≥ 0.3 的配對
@@ -78,6 +79,8 @@ def build_payload(
             "divNote": "；".join(x for x in (ex.get("div_warn"), ex.get("erosion")) if x) or None,
             # 破線狀態:{"days": 連續天數, "text": 說明} 或 None
             "brk": ex.get("breakdown"),
+            # 收盤是否站在 20 日線上:金光要求股價本身還站得住
+            "above20": ex.get("above20"),
         })
     holdings.sort(key=lambda h: -h["w"])
 
@@ -101,48 +104,66 @@ def build_payload(
 # ===== 破線 =====
 BREAK_FIRE_DAYS = 5         # 破線持續幾個交易日才從冒煙升級成起火
 SLOPE_DAYS = 5              # 均線「下彎」= 比 N 個交易日前低(不限幅度)
+CRASH_DAYS = 20             # 快速通道:這段期間內的最高點
+CRASH_PCT = 20.0            # 從那個高點跌這麼多 % 以上,且跌破三線 → 直接起火
 
 
 def breakdown_status(close) -> Optional[Dict]:
     """
-    跌破三線且均線下彎,並算出已經持續幾個交易日。
+    破線狀態,兩條路徑:
 
-    條件(每一天都要成立):
-      - 收盤低於 5 / 20 / 60 日均線
-      - 20 日線、60 日線都比 5 個交易日前低
-    只要有一天不成立(例如站回任一條均線),天數就歸零。
+    1) 慢慢破線:收盤低於 5 / 20 / 60 日均線,且 20 日、60 日線都比 5 天前低。
+       連續天數 1~4 天冒煙,滿 5 天起火。只要一天不成立就歸零。
+    2) 快速通道:收盤低於 5 / 20 / 60 日均線,而且 20 個交易日內
+       從最高點跌了 20% 以上 → 直接起火,不必等天數,也不要求均線已下彎。
 
-    為什麼「下彎」不要求幅度:曾經要求 20 日線 10 天跌 2% 以上,
-    結果台達電 2026/10 從 2050 跌到 1510(−26%),20 日線卻被
-    10 月初的急漲撐住,一直沒達到門檻,連冒煙都沒有。
-    「先急漲、再急殺」正是均線反應最慢的型態,幅度門檻會漏掉它。
-    雜訊交給「連續 5 天才起火」處理 —— 模擬顯示這才是降低假警報的
-    主力,幅度門檻只多擋掉一點,卻會漏掉真正的案例。
+    為什麼需要快速通道:均線要時間才會彎。台達電 2026/10 從 2050 跌到 1510
+    (三週 −26%),但 20 日線被 10 月初的急漲撐住,直到 10/20 才開始往下彎,
+    只靠天數規則要拖到 10/28 才起火。「跌多兇」本身就是訊號 ——
+    模擬顯示,正常震盪很少在一個月內跌兩成,加這條幾乎不增加假警報。
+
+    為什麼「下彎」不要求幅度:要求幅度時,同樣因為急漲撐住均線,
+    台達電連冒煙都沒有。雜訊交給「連續 5 天」處理。
 
     Args:
         close: 還原收盤價序列(pandas Series,舊到新)
-    Returns: {"days": int, "text": str},目前未破線回 None
+    Returns: {"days", "crash", "drop_pct", "high", "text"};未破線回 None
     """
     try:
         if close is None or len(close) < 60 + SLOPE_DAYS + 1:
             return None
         c = close.astype(float).reset_index(drop=True)
         ma5, ma20, ma60 = c.rolling(5).mean(), c.rolling(20).mean(), c.rolling(60).mean()
-        cond = ((c < ma5) & (c < ma20) & (c < ma60)
-                & (ma20 < ma20.shift(SLOPE_DAYS))
-                & (ma60 < ma60.shift(SLOPE_DAYS)))
+        below = (c < ma5) & (c < ma20) & (c < ma60)
+        cond = below & (ma20 < ma20.shift(SLOPE_DAYS)) & (ma60 < ma60.shift(SLOPE_DAYS))
         days = 0
         for v in reversed(cond.tolist()):
             if v:
                 days += 1
             else:
                 break
-        if not days:
+        high = float(c.iloc[-CRASH_DAYS:].max())
+        drop = (float(c.iloc[-1]) / high - 1) * 100
+        crash = bool(below.iloc[-1]) and drop <= -CRASH_PCT
+        if not days and not crash:
             return None
-        return {"days": days,
-                "text": (f"收盤 {c.iloc[-1]:,.2f} 跌破 5 日線 {ma5.iloc[-1]:,.2f}、"
-                         f"20 日線 {ma20.iloc[-1]:,.2f}、60 日線 {ma60.iloc[-1]:,.2f},"
-                         f"均線下彎")}
+        base = (f"收盤 {c.iloc[-1]:,.2f} 跌破 5 日線 {ma5.iloc[-1]:,.2f}、"
+                f"20 日線 {ma20.iloc[-1]:,.2f}、60 日線 {ma60.iloc[-1]:,.2f}")
+        text = (f"{base},20 天內從高點 {high:,.2f} 跌了 {abs(drop):.0f}%" if crash
+                else f"{base},均線下彎")
+        return {"days": days, "crash": crash, "drop_pct": round(drop, 1),
+                "high": round(high, 2), "text": text}
+    except Exception:
+        return None
+
+
+def above_ma20(close) -> Optional[bool]:
+    """收盤是否站在 20 日線之上(金光的條件之一)"""
+    try:
+        c = close.astype(float)
+        if len(c) < 20:
+            return None
+        return bool(c.iloc[-1] >= c.rolling(20).mean().iloc[-1])
     except Exception:
         return None
 
@@ -190,9 +211,14 @@ def _effect(h: Dict, mkt: str, mkt_breakdown: bool = False) -> Optional[str]:
             return "smoke"
         if kind != "bond" and mkt_weak:
             return "smoke"
-        return "fire" if brk["days"] >= BREAK_FIRE_DAYS else "smoke"
+        if brk.get("crash") or brk["days"] >= BREAK_FIRE_DAYS:
+            return "fire"
+        return "smoke"
+    # 金光:20 日線往上、大盤不是,而且收盤還站在 20 日線上
+    # (只看均線方向的話,急漲後急跌的股票會在下跌途中亮晶晶)
     if kind in ("stock", "high_div", "theme", "active") \
-            and h["regime"] == "上升趨勢" and mkt != "上升趨勢":
+            and h["regime"] == "上升趨勢" and mkt != "上升趨勢" \
+            and h.get("above20") is not False:
         return "gold"
     return None
 

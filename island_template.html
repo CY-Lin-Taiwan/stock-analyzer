@@ -6,8 +6,8 @@
 /* 版面:左側島嶼畫布為主角,右側是海圖式的說明欄;手機時上下堆疊 */
 :root{
   --paper:#EDF1EC; --panel:#F8FAF6; --ink:#1E2A29; --muted:#5E6E6B; --line:#CBD6D1;
-  --sea:#8FC0C3; --sea-deep:#6FA6AB; --sand:#E7DDBF; --grass:#BFD4A6; --plot:#D7E3C6;
-  --signal:#D9A21B; --link:#2C6E7A;
+  --sea:#6CC6DA; --sea-deep:#3FA3BE; --sand:#F4E2A6; --grass:#BFD4A6; --plot:#D7E3C6;
+  --signal:#D9A21B; --link:#2C6E7A; --inkline:#231B16;
   --d0:#EBDDBF; --d1:#C9DAF0; --d2:#DED1EC; --d3:#CFD6E4; --d4:#F0E6B4; --d5:#C3DEE6;
   --buy:#D2403A; --sell:#23905A;
   /* 狀態色(台股慣例):色系 = 中期方向(紅上、綠下、灰區間),深淺 = 短期是否同向 */
@@ -22,7 +22,7 @@
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --paper:#121A1B; --panel:#182223; --ink:#E4ECE8; --muted:#93A4A0; --line:#2C3B3C;
   --sea:#1F4A52; --sea-deep:#163A41; --sand:#5B5640; --grass:#3E5A3C; --plot:#4A6447;
-  --signal:#E8B931; --link:#7CC4CF;
+  --signal:#E8B931; --link:#7CC4CF; --inkline:#0E0B09;
   --d0:#665A3E; --d1:#3C5275; --d2:#54476A; --d3:#46506A; --d4:#6A6233; --d5:#2F5866;
   --buy:#F0605A; --sell:#3DB775;
   --su2:#E0525A; --su1:#EE7B74; --su0:#F2B3AD;
@@ -33,7 +33,7 @@
 :root[data-theme="dark"]{
   --paper:#121A1B; --panel:#182223; --ink:#E4ECE8; --muted:#93A4A0; --line:#2C3B3C;
   --sea:#1F4A52; --sea-deep:#163A41; --sand:#5B5640; --grass:#3E5A3C; --plot:#4A6447;
-  --signal:#E8B931; --link:#7CC4CF;
+  --signal:#E8B931; --link:#7CC4CF; --inkline:#0E0B09;
   --d0:#665A3E; --d1:#3C5275; --d2:#54476A; --d3:#46506A; --d4:#6A6233; --d5:#2F5866;
   --buy:#F0605A; --sell:#3DB775;
   --su2:#E0525A; --su1:#EE7B74; --su0:#F2B3AD;
@@ -54,10 +54,10 @@ h1{font-family:var(--f-display);font-size:2rem;font-weight:700;margin:0;letter-s
 @media (max-width:860px){.main{grid-template-columns:minmax(0,1fr)}}
 .stage{position:relative;min-width:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--sea)}
 canvas{display:block;width:100%;height:auto;cursor:pointer;touch-action:manipulation}
-.wx{position:absolute;left:12px;top:10px;font-size:.8rem;background:var(--panel);border:1px solid var(--line);padding:3px 10px;border-radius:999px;font-family:var(--f-data)}
-.fs{position:absolute;right:12px;top:10px;font:inherit;font-size:.8rem;background:var(--panel);color:var(--ink);
-  border:1px solid var(--line);padding:3px 12px;border-radius:999px;cursor:pointer}
-.flowtag{position:absolute;right:12px;top:46px;font-size:.8rem;line-height:1.5;background:var(--panel);border:1px solid var(--line);
+.wx{position:absolute;left:12px;top:10px;font-size:.8rem;background:var(--panel);border:2px solid var(--inkline);box-shadow:2px 2px 0 var(--inkline);font-weight:700;padding:3px 10px;border-radius:999px;font-family:var(--f-data)}
+.fs{position:absolute;right:12px;top:10px;font:inherit;font-size:.8rem;font-weight:700;box-shadow:2px 2px 0 var(--inkline);background:var(--panel);color:var(--ink);
+  border:2px solid var(--inkline);padding:3px 12px;border-radius:999px;cursor:pointer}
+.flowtag{position:absolute;right:12px;top:50px;font-size:.8rem;line-height:1.5;background:var(--panel);border:2px solid var(--inkline) !important;box-shadow:3px 3px 0 var(--inkline);
   padding:5px 12px;border-radius:10px;font-variant-numeric:tabular-nums;max-width:calc(100% - 24px);display:flex;flex-direction:column;gap:1px}
 .flowtag span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .flowtag b{font-weight:700}
@@ -92,7 +92,7 @@ aside{display:flex;flex-direction:column;gap:12px;min-width:0}
 /* 日誌:疊在地圖底部的跑馬燈,展開後往上長出清單 */
 .logbox{position:absolute;left:10px;right:10px;bottom:10px;display:flex;flex-direction:column;gap:6px;
   bottom:max(10px,env(safe-area-inset-bottom,0px))}
-.ticker{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+.ticker{display:flex;align-items:center;gap:10px;background:var(--panel);border:2px solid var(--inkline);border-radius:12px;box-shadow:3px 3px 0 var(--inkline) !important;
   padding:6px 8px 6px 10px;font-size:.84rem;box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .live{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;font-weight:700;color:var(--muted);letter-spacing:.1em;flex:none}
 .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--hot)}
@@ -348,6 +348,10 @@ function buildLayout(thr){
   }
   layout = {cl, bld, land};
   landSet = new Set(land.map(t=>t.x+","+t.y));
+  const tHash = (x,y)=>{ const n=Math.sin(x*91.7+y*47.3)*1e4; return n-Math.floor(n); };
+  layout.trees = land.filter(t=>!t.plot && tHash(t.x,t.y)>.78
+      && landSet.has(t.x+1+","+t.y) && landSet.has(t.x+","+(t.y+1)))
+    .map(t=>({x:t.x, y:t.y, sz:tHash(t.y,t.x)}));
 }
 
 // ===== 等角投影 =====
@@ -398,6 +402,26 @@ function fit(){
 }
 let W=0,H=0;
 
+// ===== 漫畫風:粗墨線 + 平塗 + 硬陰影 =====
+const INK = "#231B16";
+const lw = (k=1) => Math.max(1.2, TH*.065) * k;
+function ink(fill, k=1){
+  if (fill){ ctx.fillStyle = fill; ctx.fill(); }
+  ctx.strokeStyle = INK; ctx.lineWidth = lw(k); ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
+}
+function poly(pts){ ctx.beginPath(); pts.forEach(([x,y],i)=> i?ctx.lineTo(x,y):ctx.moveTo(x,y)); ctx.closePath(); }
+// 一團帶墨線的圓(雲、煙、樹冠都用):先畫粗外框,再整片填色蓋掉內側線
+function puff(circles, fill, k=1){
+  ctx.strokeStyle = INK; ctx.lineWidth = lw(k)*2;
+  circles.forEach(([x,y,r])=>{ ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.stroke(); });
+  ctx.fillStyle = fill;
+  circles.forEach(([x,y,r])=>{ ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill(); });
+}
+// 名牌:白底粗框 + 右下硬陰影
+function tag(x, y, w, h, r, fill){
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.roundRect(x+2, y+2, w, h, r); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ink(fill, .8);
+}
 function diamond(gx,gy,s,fill,stroke){
   const [ax,ay]=iso(gx,gy),[bx,by]=iso(gx+s,gy),[cx_,cy_]=iso(gx+s,gy+s),[dx,dy]=iso(gx,gy+s);
   ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.lineTo(cx_,cy_); ctx.lineTo(dx,dy); ctx.closePath();
@@ -431,40 +455,50 @@ function drawBuilding(b, t){
     g.addColorStop(0,c0); g.addColorStop(1,"rgba(255,180,60,0)");
     ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(midX,cy,R,R*.85,0,0,7); ctx.fill();
   }
-  // 陰影
-  ctx.fillStyle="rgba(0,0,0,.12)";
-  ctx.beginPath(); ctx.moveTo(B[0],B[1]); ctx.lineTo(Cc[0],Cc[1]); ctx.lineTo(Cc[0]+TW*.35,Cc[1]-TH*.1); ctx.lineTo(B[0]+TW*.35,B[1]-TH*.1); ctx.closePath(); ctx.fill();
-  // 左面
-  ctx.fillStyle=shade(col,-.28);
-  ctx.beginPath(); ctx.moveTo(D[0],D[1]); ctx.lineTo(Cc[0],Cc[1]); ctx.lineTo(Cc[0],Cc[1]-hgt); ctx.lineTo(D[0],D[1]-hgt); ctx.closePath(); ctx.fill();
-  // 右面
-  ctx.fillStyle=shade(col,-.12);
-  ctx.beginPath(); ctx.moveTo(Cc[0],Cc[1]); ctx.lineTo(B[0],B[1]); ctx.lineTo(B[0],B[1]-hgt); ctx.lineTo(Cc[0],Cc[1]-hgt); ctx.closePath(); ctx.fill();
-  // 窗格
-  ctx.fillStyle="rgba(255,255,255,.22)";
-  const floors = Math.max(2, Math.round(hgt/(TH*.45)));
+  // 地面硬陰影
+  ctx.fillStyle="rgba(35,27,22,.18)";
+  poly([B, Cc, [Cc[0]+TW*.4,Cc[1]-TH*.08], [B[0]+TW*.4,B[1]-TH*.08]]); ctx.fill();
+  const up = p => [p[0], p[1]-hgt];
+  // 左面(暗)、右面(亮),平塗 + 墨線
+  poly([D, Cc, up(Cc), up(D)]); ink(shade(col,-.3));
+  poly([Cc, B, up(B), up(Cc)]); ink(shade(col,-.04));
+  // 右面受光的亮邊
+  ctx.fillStyle = "rgba(255,255,255,.35)";
+  const hl = .1;
+  poly([Cc, [Cc[0]+(B[0]-Cc[0])*hl, Cc[1]+(B[1]-Cc[1])*hl],
+        [Cc[0]+(B[0]-Cc[0])*hl, Cc[1]+(B[1]-Cc[1])*hl-hgt], up(Cc)]); ctx.fill();
+  // 窗:圓角小窗 + 細墨線
+  const floors = Math.max(2, Math.round(hgt/(TH*.5)));
+  const ww = Math.max(2.5, TH*.13), wh = Math.max(3, TH*.18);
   for (let i=1;i<floors;i++){
     const yy = i*hgt/floors;
-    for (const f of [.3,.65]){
-      const px = Cc[0]+(B[0]-Cc[0])*f, py = Cc[1]+(B[1]-Cc[1])*f - yy;
-      ctx.fillRect(px-1.5, py-TH*.12, 3, TH*.16);
+    for (const [P,Q,cols,fillW] of [[Cc,B,[.35,.7],"rgba(255,248,214,.85)"],[D,Cc,[.4,.75],"rgba(255,255,255,.35)"]]){
+      for (const f of cols){
+        const px = P[0]+(Q[0]-P[0])*f, py = P[1]+(Q[1]-P[1])*f - yy;
+        ctx.beginPath(); ctx.roundRect(px-ww/2, py-wh*.7, ww, wh, ww*.35); ink(fillW, .45);
+      }
     }
   }
-  // 頂面
-  ctx.fillStyle = shade(col,.18);
-  ctx.beginPath(); ctx.moveTo(A[0],A[1]-hgt); ctx.lineTo(B[0],B[1]-hgt); ctx.lineTo(Cc[0],Cc[1]-hgt); ctx.lineTo(D[0],D[1]-hgt); ctx.closePath(); ctx.fill();
-  if (b===selected){ ctx.strokeStyle=C.signal; ctx.lineWidth=2.5; ctx.stroke(); }
-  drawEffect(fx, b, midX, roofY, s, t);
+  // 屋頂:外伸一圈的厚屋簷(圓胖感)
+  const e = .07, rt = Math.max(3, TH*.16);
+  const A2=iso(x0-e,y0-e), B2=iso(x0+z+e,y0-e), C2=iso(x0+z+e,y0+z+e), D2=iso(x0-e,y0+z+e);
+  const lift = p => [p[0], p[1]-hgt-rt*.2];
+  const lid = p => [p[0], p[1]-hgt-rt];
+  poly([lift(D2), lift(C2), lid(C2), lid(D2)]); ink(shade(col,-.42));
+  poly([lift(C2), lift(B2), lid(B2), lid(C2)]); ink(shade(col,-.22));
+  poly([lid(A2), lid(B2), lid(C2), lid(D2)]); ink(shade(col,.22));
+  if (b===selected){ ctx.strokeStyle=C.signal; ctx.lineWidth=lw(2.2); ctx.stroke(); ink(null,.8); }
+  drawEffect(fx, b, midX, roofY - Math.max(3, TH*.16), s, t);
   // 名牌
   const top = [(A[0]+Cc[0])/2, (A[1]+Cc[1])/2 - hgt];
   const bob = reduce?0:Math.sin(t/700 + b.gx)*1.5;
   const label = `${b.sym} ${b.name}`;
   ctx.font = `700 ${Math.max(11,Math.min(15,TH*.4))}px ${F_BODY}`;
   const tw = ctx.measureText(label).width + 12, lh = Math.max(18, Math.min(24, TH*.6));
-  const lx = top[0]-tw/2, ly = top[1]-lh-8+bob - (fx ? TH*1.2 : 0);
-  ctx.fillStyle=C.panel; ctx.strokeStyle=C.line; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.roundRect(lx,ly,tw,lh,4); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(top[0],ly+lh); ctx.lineTo(top[0],top[1]-2); ctx.strokeStyle=C.muted; ctx.stroke();
+  const lx = top[0]-tw/2, ly = top[1]-lh-10-Math.max(3,TH*.16)+bob - (fx ? TH*1.3 : 0);
+  ctx.beginPath(); ctx.moveTo(top[0],ly+lh); ctx.lineTo(top[0],top[1]-Math.max(3,TH*.16)-2);
+  ctx.strokeStyle=INK; ctx.lineWidth=lw(.7); ctx.stroke();
+  tag(lx, ly, tw, lh, lh/2, C.panel);
   ctx.fillStyle=C.ink; ctx.textBaseline="middle"; ctx.textAlign="center";
   ctx.fillText(label, top[0], ly+lh/2+.5);
   b.hit = {x0:Math.min(D[0],lx), x1:Math.max(B[0],lx+tw), y0:ly, y1:Cc[1]};
@@ -477,49 +511,55 @@ function drawEffect(fx, b, x, y, s, t){
   const A0 = ctx.globalAlpha;
   const T = reduce ? 0 : t;
   const u = TH;
-  if (fx==="fire"){
-    // 火舌:幾道閃爍的水滴形,外橘內黃
-    const n = 3 + s;
-    for (let i=0;i<n;i++){
-      const ox = (i-(n-1)/2) * u*.55;
-      const h = u*(1.1 + .5*Math.sin(T/110 + i*1.7 + b.gx));
-      for (const [c,k] of [["#E5482B",1],["#F59A2B",.68],["#FFE07A",.38]]){
-        const hh=h*k, ww=u*.32*k + u*.08;
-        ctx.fillStyle=c; ctx.beginPath();
-        ctx.moveTo(x+ox-ww, y);
-        ctx.quadraticCurveTo(x+ox-ww*.9, y-hh*.55, x+ox + Math.sin(T/90+i)*u*.12, y-hh);
-        ctx.quadraticCurveTo(x+ox+ww*.9, y-hh*.55, x+ox+ww, y);
-        ctx.closePath(); ctx.fill();
-      }
-    }
-  }
   if (fx==="fire" || fx==="smoke"){
-    // 煙:往上飄、逐漸變大變淡的圓
+    // 煙:一團團帶墨線的蓬蓬雲,往上飄、變大、變淡
     const dark = fx==="fire";
-    for (let i=0;i<6;i++){
-      const ph = ((T/2400) + i/6) % 1;
-      const py = y - u*(fx==="fire"?1.2:.4) - ph*u*2.4;
-      const px = x + Math.sin(ph*5 + i + b.gx)*u*.6 + ph*u*1.2;
-      ctx.globalAlpha = A0*(1-ph) * (dark ? .55 : .6);
-      ctx.fillStyle = dark ? "#4B4642" : "#9A9894";
-      ctx.beginPath(); ctx.arc(px, py, u*(.3 + ph*.6), 0, 7); ctx.fill();
+    for (let i=0;i<5;i++){
+      const ph = ((T/2600) + i/5) % 1;
+      const py = y - u*(dark?1.5:.5) - ph*u*2.6;
+      const px = x + Math.sin(ph*5 + i + b.gx)*u*.5 + ph*u*1.3;
+      const r = u*(.28 + ph*.42);
+      ctx.globalAlpha = A0*Math.min(1,(1-ph)*1.6);
+      puff([[px,py,r],[px+r*.8,py+r*.15,r*.75],[px-r*.7,py+r*.2,r*.7]], dark ? "#8A837C" : "#E4E0DA", .7);
     }
     ctx.globalAlpha = A0;
   }
+  if (fx==="fire"){
+    // 火焰:鋸齒狀外焰(墨線)+ 內焰 + 焰心
+    const n = 2 + s;
+    for (let i=0;i<n;i++){
+      const ox = (i-(n-1)/2) * u*.6;
+      const h = u*(1.25 + .45*Math.sin(T/120 + i*1.7 + b.gx));
+      const flame = (hh, ww, wob) => {
+        const cx = x+ox, tip = cx + Math.sin(T/95+i)*u*.14;
+        ctx.beginPath();
+        ctx.moveTo(cx-ww, y);
+        ctx.quadraticCurveTo(cx-ww*1.1, y-hh*.45, cx-ww*.45, y-hh*.62);
+        ctx.quadraticCurveTo(cx-ww*.55, y-hh*.8, tip-wob, y-hh*.78);
+        ctx.lineTo(tip, y-hh);
+        ctx.quadraticCurveTo(cx+ww*.35, y-hh*.7, cx+ww*.6, y-hh*.62);
+        ctx.quadraticCurveTo(cx+ww*1.1, y-hh*.4, cx+ww, y);
+        ctx.closePath();
+      };
+      flame(h, u*.42, u*.12); ink("#E8452C", .8);
+      flame(h*.68, u*.28, u*.08); ctx.fillStyle="#FF9F1C"; ctx.fill();
+      flame(h*.38, u*.15, u*.04); ctx.fillStyle="#FFE66D"; ctx.fill();
+    }
+  }
   if (fx==="gold"){
-    // 金色星芒往上漂
-    for (let i=0;i<7;i++){
-      const ph = ((T/2000) + i/7) % 1;
+    // 金光:帶墨線的四角星,一閃一閃往上飄
+    for (let i=0;i<6;i++){
+      const ph = ((T/2000) + i/6) % 1;
       const px = x + Math.sin(i*2.3 + b.gx)*u*(1+s*.4);
       const py = y + u*.6 - ph*u*3.2;
-      const r = u*.22*(1-Math.abs(ph-.5)*1.4);
+      const r = u*.26*(1-Math.abs(ph-.5)*1.3);
       if (r<=0) continue;
       ctx.globalAlpha = A0*Math.sin(ph*Math.PI);
-      ctx.fillStyle = "#FFD45A";
       ctx.beginPath();
-      ctx.moveTo(px,py-r*2); ctx.lineTo(px+r*.5,py-r*.5); ctx.lineTo(px+r*2,py);
-      ctx.lineTo(px+r*.5,py+r*.5); ctx.lineTo(px,py+r*2); ctx.lineTo(px-r*.5,py+r*.5);
-      ctx.lineTo(px-r*2,py); ctx.lineTo(px-r*.5,py-r*.5); ctx.closePath(); ctx.fill();
+      ctx.moveTo(px,py-r*2); ctx.quadraticCurveTo(px,py,px+r*2,py);
+      ctx.quadraticCurveTo(px,py,px,py+r*2); ctx.quadraticCurveTo(px,py,px-r*2,py);
+      ctx.quadraticCurveTo(px,py,px,py-r*2); ctx.closePath();
+      ink("#FFD93D", .55);
     }
     ctx.globalAlpha = A0;
   }
@@ -536,40 +576,41 @@ function onLand(x, y){
 const HAIR = ["#3A2A20","#1F1F24","#6B4423","#8A5A2B","#2E2A3A"];
 const SKIN = ["#F3D3B5","#EBC39F","#DDB08C","#F6DCC3"];
 function drawWalker(x, y, face, col, alpha, phase, v){
-  const h = Math.max(11, TH*.9), A0 = ctx.globalAlpha;
-  const dir = face>0 ? 1 : -1, sw = Math.sin(phase), bob = Math.abs(Math.cos(phase))*h*.03;
+  const h = Math.max(12, TH*.95), A0 = ctx.globalAlpha;
+  const dir = face>0 ? 1 : -1, sw = Math.sin(phase), bob = Math.abs(Math.cos(phase))*h*.04;
+  const k = Math.max(.5, h*.045)/lw();
   ctx.globalAlpha = A0*alpha;
-  // 影子
-  ctx.fillStyle = "rgba(0,0,0,.16)";
+  ctx.fillStyle = "rgba(35,27,22,.2)";
   ctx.beginPath(); ctx.ellipse(x, y, h*.2, h*.07, 0, 0, 7); ctx.fill();
   ctx.lineCap = "round";
-  // 腿(深色褲子)
-  ctx.strokeStyle = "#3B4252"; ctx.lineWidth = Math.max(1.6, h*.11);
+  // 腿
+  ctx.strokeStyle = INK; ctx.lineWidth = Math.max(1.8, h*.12);
   ctx.beginPath();
-  ctx.moveTo(x-h*.05, y-h*.3-bob); ctx.lineTo(x-h*.05+sw*h*.1, y-h*.02);
-  ctx.moveTo(x+h*.05, y-h*.3-bob); ctx.lineTo(x+h*.05-sw*h*.1, y-h*.02);
+  ctx.moveTo(x-h*.05, y-h*.3-bob); ctx.lineTo(x-h*.05+sw*h*.11, y-h*.02);
+  ctx.moveTo(x+h*.05, y-h*.3-bob); ctx.lineTo(x+h*.05-sw*h*.11, y-h*.02);
   ctx.stroke();
-  // 後手臂
-  ctx.strokeStyle = shade(col,-.3); ctx.lineWidth = Math.max(1.4, h*.09);
-  ctx.beginPath(); ctx.moveTo(x-dir*h*.1, y-h*.55-bob); ctx.lineTo(x-dir*h*.1-sw*h*.1, y-h*.35-bob); ctx.stroke();
   // 衣服(身體)
-  ctx.fillStyle = col;
-  ctx.beginPath(); ctx.roundRect(x-h*.15, y-h*.62-bob, h*.3, h*.34, h*.1); ctx.fill();
-  ctx.fillStyle = shade(col,-.18);
-  ctx.beginPath(); ctx.roundRect(x+dir*h*.02-(dir<0?h*.13:0), y-h*.62-bob, h*.13, h*.34, h*.08); ctx.fill();
-  // 前手臂
-  ctx.strokeStyle = shade(col,-.12); ctx.lineWidth = Math.max(1.4, h*.09);
-  ctx.beginPath(); ctx.moveTo(x+dir*h*.1, y-h*.55-bob); ctx.lineTo(x+dir*h*.1+sw*h*.1, y-h*.35-bob); ctx.stroke();
-  // 頭
-  const hx = x+dir*h*.02, hy = y-h*.8-bob, hr = h*.2;
-  ctx.fillStyle = SKIN[v % SKIN.length];
-  ctx.beginPath(); ctx.arc(hx, hy, hr, 0, 7); ctx.fill();
-  // 頭髮
-  ctx.fillStyle = HAIR[v % HAIR.length];
-  ctx.beginPath(); ctx.arc(hx-dir*hr*.15, hy-hr*.15, hr*1.02, Math.PI*1.05, Math.PI*1.95); ctx.fill();
-  // 眼睛(看出面向)
-  ctx.fillStyle = "#2A2A2A";
-  ctx.beginPath(); ctx.arc(hx+dir*hr*.45, hy+hr*.05, Math.max(.8, hr*.12), 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(x-h*.16, y-h*.64-bob, h*.32, h*.36, h*.12); ink(col, k);
+  // 手臂
+  ctx.strokeStyle = INK; ctx.lineWidth = Math.max(1.4, h*.08);
+  ctx.beginPath(); ctx.moveTo(x+dir*h*.12, y-h*.56-bob); ctx.lineTo(x+dir*h*.14+sw*h*.12, y-h*.36-bob); ctx.stroke();
+  // 大頭
+  const hx = x+dir*h*.02, hy = y-h*.84-bob, hr = h*.23;
+  ctx.beginPath(); ctx.arc(hx, hy, hr, 0, 7); ink(SKIN[v % SKIN.length], k);
+  // 頭髮:刺刺的漫畫瀏海
+  ctx.beginPath();
+  ctx.moveTo(hx-hr*1.05, hy-hr*.05);
+  for (let j=0;j<=4;j++){
+    const a1 = Math.PI*(1.05 + j*.225);
+    ctx.lineTo(hx+Math.cos(a1)*hr*1.45, hy+Math.sin(a1)*hr*1.45 - hr*.1);
+    const a2 = a1 + Math.PI*.11;
+    ctx.lineTo(hx+Math.cos(a2)*hr*.95, hy+Math.sin(a2)*hr*.95);
+  }
+  ctx.lineTo(hx+hr*1.05, hy-hr*.05); ctx.closePath();
+  ink(HAIR[v % HAIR.length], k);
+  // 大眼睛(看得出面向)
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.ellipse(hx+dir*hr*.42, hy+hr*.15, Math.max(.9,hr*.13), Math.max(1.2,hr*.2), 0, 0, 7); ctx.fill();
   ctx.lineCap = "butt"; ctx.globalAlpha = A0;
 }
 // 跨街區的捷運:兩區之間最強的一組相關性 ≥ 0.3 才通車(同區的已是空橋)
@@ -583,6 +624,19 @@ function metroLinks(){
   return out;
 }
 
+// 樹:圓滾滾的樹冠 + 墨線(純裝飾,不代表任何資料)
+function drawTree(tr, t){
+  if (focusD!==null) ctx.globalAlpha = .4;
+  const [x,y] = iso(tr.x+.5, tr.y+.5), u = TH*(.8 + tr.sz*.4);
+  const sway = reduce ? 0 : Math.sin(t/900 + tr.x)*u*.04;
+  ctx.fillStyle="rgba(35,27,22,.18)"; ctx.beginPath(); ctx.ellipse(x+u*.15,y,u*.42,u*.15,0,0,7); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(x-u*.08, y-u*.7, u*.16, u*.7, u*.05); ink("#9C6B3F", .7);
+  const cx = x+sway, cy = y-u*1.05;
+  puff([[cx,cy-u*.18,u*.36],[cx-u*.3,cy+u*.08,u*.3],[cx+u*.3,cy+u*.1,u*.3]], "#7FBF5F", .8);
+  ctx.fillStyle="rgba(255,255,255,.35)"; ctx.beginPath(); ctx.arc(cx-u*.1,cy-u*.3,u*.1,0,7); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
 function roofPoint(b){ return b.roof || iso(b.gx+b.s/2,b.gy+b.s/2); }
 
 // ===== 天氣粒子 =====
@@ -593,25 +647,41 @@ let selected = null;
 function frame(t){
   ctx.clearRect(0,0,W,H);
   const kind = (WEATHER[mktRegime()]||{kind:"cloud"}).kind;
-  // 海
+  // 海:平塗 + 一個個小浪花記號
   ctx.fillStyle = C.sea; ctx.fillRect(0,0,W,H);
-  ctx.strokeStyle = shade(C.sea,.18); ctx.lineWidth=1;
-  for (let y=8; y<H; y+=18){
-    ctx.beginPath();
-    for (let x=0;x<=W;x+=12){ const yy = y + Math.sin(x/40 + (reduce?0:t/900) + y)*2.2; x?ctx.lineTo(x,yy):ctx.moveTo(x,yy); }
-    ctx.globalAlpha=.35; ctx.stroke(); ctx.globalAlpha=1;
+  // 浪花亮度依海的深淺調整:深色主題下太亮會很吵
+  const seaLum = (()=>{ const m = shade(C.sea,0).match(/\d+/g).map(Number); return (m[0]*.3+m[1]*.59+m[2]*.11)/255; })();
+  ctx.strokeStyle = seaLum > .5 ? "rgba(255,255,255,.75)" : "rgba(170,215,225,.28)";
+  ctx.lineWidth = Math.max(1.2, TH*.05); ctx.lineCap="round";
+  const drift = reduce ? 0 : (t/80) % 60;
+  for (let gy=20; gy<H; gy+=34){
+    for (let gx=((gy/34)%2)*30 - 60; gx<W+60; gx+=60){
+      const x = gx + drift, y = gy + Math.sin((gx+gy)*.7)*6;
+      const r = 5 + ((gx*13+gy*7)%5);
+      ctx.beginPath(); ctx.arc(x-r, y, r, Math.PI*1.1, Math.PI*1.9); ctx.arc(x+r, y, r, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
+    }
   }
-  // 陸地
+  ctx.lineCap="butt";
+  // 陸地:平塗頂面,露出來的側面與外緣上墨線
   const land = [...layout.land].sort((a,b)=>(a.x+a.y)-(b.x+b.y));
+  const has = (x,y) => landSet.has(x+","+y);
+  const cliff = TH*.42;
   land.forEach(tl=>{
-    const [px,py]=iso(tl.x,tl.y+1), [qx,qy]=iso(tl.x+1,tl.y+1), [rx,ry]=iso(tl.x+1,tl.y);
-    ctx.fillStyle = shade(C.sand,-.25);
-    ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(qx,qy); ctx.lineTo(qx,qy+TH*.35); ctx.lineTo(px,py+TH*.35); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = shade(C.sand,-.35);
-    ctx.beginPath(); ctx.moveTo(qx,qy); ctx.lineTo(rx,ry); ctx.lineTo(rx,ry+TH*.35); ctx.lineTo(qx,qy+TH*.35); ctx.closePath(); ctx.fill();
+    const P=iso(tl.x,tl.y+1), Q=iso(tl.x+1,tl.y+1), R=iso(tl.x+1,tl.y);
+    if (!has(tl.x,tl.y+1)){ poly([P,Q,[Q[0],Q[1]+cliff],[P[0],P[1]+cliff]]); ink(shade(C.sand,-.28), .8); }
+    if (!has(tl.x+1,tl.y)){ poly([Q,R,[R[0],R[1]+cliff],[Q[0],Q[1]+cliff]]); ink(shade(C.sand,-.4), .8); }
     const dc = tl.plot ? C["d"+(tl.plot.idx%6)] : null;
     diamond(tl.x,tl.y,1, dc || (tl.beach? C.sand : C.grass), dc ? shade(dc,-.12) : null);
   });
+  // 島的外緣
+  ctx.strokeStyle = INK; ctx.lineWidth = lw(); ctx.lineCap = "round";
+  land.forEach(tl=>{
+    const A=iso(tl.x,tl.y), B=iso(tl.x+1,tl.y), Cq=iso(tl.x+1,tl.y+1), D=iso(tl.x,tl.y+1);
+    [[A,B,tl.x,tl.y-1],[B,Cq,tl.x+1,tl.y],[Cq,D,tl.x,tl.y+1],[D,A,tl.x-1,tl.y]].forEach(([p,q,nx,ny])=>{
+      if (!has(nx,ny)){ ctx.beginPath(); ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]); ctx.stroke(); }
+    });
+  });
+  ctx.lineCap = "butt";
   // 街區名牌(地面):放在街區最前方的角落,帶底板
   layout.cl.forEach((c,i)=>{
     const p=c.plot, [x,y]=iso(p.x0,p.y1+1);
@@ -619,8 +689,7 @@ function frame(t){
     ctx.font=`700 ${Math.max(11,Math.min(14,TH*.42))}px ${F_BODY}`;
     const tw = ctx.measureText(txt).width + 14, th = Math.max(18,Math.min(22,TH*.6));
     ctx.globalAlpha = (focusD===null || focusD===i) ? 1 : .35;
-    ctx.fillStyle = C["d"+(i%6)]; ctx.strokeStyle = shade(C["d"+(i%6)],-.25); ctx.lineWidth=1;
-    ctx.beginPath(); ctx.roundRect(x-tw/2, y+TH*.25, tw, th, th/2); ctx.fill(); ctx.stroke();
+    tag(x-tw/2, y+TH*.25, tw, th, th/2, C["d"+(i%6)]);
     ctx.fillStyle=C.ink; ctx.textAlign="center"; ctx.textBaseline="middle";
     ctx.fillText(txt, x, y+TH*.25+th/2+.5);
     ctx.globalAlpha = 1;
@@ -655,9 +724,8 @@ function frame(t){
         const [x1,y1]=q(u), [x2,y2]=q(Math.min(1,u+.04));
         const ang=Math.atan2(y2-y1,x2-x1), L=TH*1.1, H2=TH*.42;
         ctx.save(); ctx.translate(x1,y1-TH*.12); ctx.rotate(ang);
-        ctx.fillStyle=C.link; ctx.beginPath(); ctx.roundRect(-L/2,-H2/2,L,H2,H2/2); ctx.fill();
-        ctx.fillStyle="rgba(255,255,255,.75)";
-        for (const wx of [-L*.22, 0, L*.22]) ctx.fillRect(wx-L*.07,-H2*.22,L*.14,H2*.3);
+        ctx.beginPath(); ctx.roundRect(-L/2,-H2/2,L,H2,H2/2); ink(C.link, .7);
+        for (const wx of [-L*.22, 0, L*.22]){ ctx.beginPath(); ctx.roundRect(wx-L*.07,-H2*.24,L*.14,H2*.34,2); ink("#FFF8D6", .35); }
         ctx.restore();
       }
     });
@@ -669,8 +737,7 @@ function frame(t){
     });
     used.forEach(i=>{
       const [x,y]=st[i];
-      ctx.fillStyle=C.panel; ctx.strokeStyle=C.link; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(x,y,TH*.32,0,7); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x,y,TH*.34,0,7); ink(C.panel, .8);
       ctx.fillStyle=C.link; ctx.font=`700 ${Math.max(9,TH*.32)}px ${F_BODY}`;
       ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText("M",x,y+.5);
     });
@@ -712,7 +779,7 @@ function frame(t){
       ctx.lineCap="butt";
       // 碼頭
       ctx.save(); ctx.translate(sx,sy); ctx.rotate(Math.atan2(dy,dx));
-      ctx.fillStyle = shade(C.sand,-.45); ctx.fillRect(-TH*.1,-TH*.35,TH*1.0,TH*.7);
+      ctx.beginPath(); ctx.rect(-TH*.1,-TH*.35,TH*1.0,TH*.7); ink("#B07A48", .7);
       ctx.restore();
       // 人
       const n = 3 + Math.round(mag*11);
@@ -730,8 +797,10 @@ function frame(t){
       }
     });
   }
-  // 建築
-  [...layout.bld].sort((a,b)=>(a.gx+a.gy+a.s)-(b.gx+b.gy+b.s)).forEach(b=>drawBuilding(b,t));
+  // 建築 + 樹(依深度一起排序)
+  const items = layout.bld.map(b=>({d:b.gx+b.gy+b.s, f:()=>drawBuilding(b,t)}));
+  layout.trees.forEach(tr=>items.push({d:tr.x+tr.y+1, f:()=>drawTree(tr, t)}));
+  items.sort((a,b)=>a.d-b.d).forEach(it=>it.f());
 
   // ---- 空橋:同街區的強關聯(相關性 ≥ 門檻)----
   // 接在兩棟中較矮那棟的六成高度,越粗代表越同步。拉低門檻,空橋會一座座搭起來。
@@ -748,10 +817,7 @@ function frame(t){
       const mine = selected && (a===selected || c===selected);
       ctx.globalAlpha = selected && !mine ? .55 : 1;
       // 橋身(玻璃)+ 頂緣
-      ctx.fillStyle = shade(C.link, .55); ctx.strokeStyle = shade(C.link, -.1); ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(ax, ay-hb); ctx.lineTo(cx, cy-hb); ctx.lineTo(cx, cy-hb+th); ctx.lineTo(ax, ay-hb+th);
-      ctx.closePath(); ctx.fill(); ctx.stroke();
+      poly([[ax, ay-hb],[cx, cy-hb],[cx, cy-hb+th],[ax, ay-hb+th]]); ink(shade(C.link, .55), .8);
       ctx.strokeStyle = mine ? C.signal : C.link; ctx.lineWidth = mine ? 3 : 2;
       ctx.beginPath(); ctx.moveTo(ax, ay-hb); ctx.lineTo(cx, cy-hb); ctx.stroke();
       // 窗格
@@ -775,14 +841,21 @@ function frame(t){
     ctx.fillText(l.txt, lx + tw/2, ly + 11.5);
   });
   // 天氣
+  const cloud = (x, y, k, fill) => puff([[x,y,16*k],[x+20*k,y-9*k,19*k],[x+42*k,y-2*k,15*k],[x+22*k,y+6*k,15*k]], fill, .9);
   if (kind==="sun"){
-    const g=ctx.createRadialGradient(W-50,40,4,W-50,40,160);
-    g.addColorStop(0,"rgba(255,220,120,.55)"); g.addColorStop(1,"rgba(255,220,120,0)");
+    const g=ctx.createRadialGradient(W*.5,40,4,W*.5,40,180);
+    g.addColorStop(0,"rgba(255,226,120,.45)"); g.addColorStop(1,"rgba(255,226,120,0)");
     ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    const sx=W*.5, sy=44, R=17, spin = reduce?0:t/4000;
+    for (let k=0;k<10;k++){
+      const a=spin+k*Math.PI/5;
+      poly([[sx+Math.cos(a-.16)*R*1.25, sy+Math.sin(a-.16)*R*1.25],[sx+Math.cos(a)*R*1.9, sy+Math.sin(a)*R*1.9],
+            [sx+Math.cos(a+.16)*R*1.25, sy+Math.sin(a+.16)*R*1.25]]); ink("#FFC93C", .7);
+    }
+    ctx.beginPath(); ctx.arc(sx,sy,R,0,7); ink("#FFE066");
   } else if (kind==="cloud"){
-    ctx.fillStyle="rgba(255,255,255,.28)";
-    for (let i=0;i<3;i++){ const x=((reduce?0:t/60)+i*W/3)%(W+200)-100, y=40+i*28;
-      ctx.beginPath(); ctx.ellipse(x,y,70,16,0,0,7); ctx.ellipse(x+40,y-10,46,14,0,0,7); ctx.fill(); }
+    for (let i=0;i<3;i++){ const x=((reduce?0:t/60)+i*W/3)%(W+200)-100, y=42+i*26;
+      cloud(x, y, .9+i*.15, "#FFFFFF"); }
   } else if (kind==="fog"){
     for (let i=0;i<5;i++){ const y=H*(i+.5)/5 + (reduce?0:Math.sin(t/2000+i)*12);
       const g=ctx.createLinearGradient(0,y-30,0,y+30);
@@ -790,6 +863,7 @@ function frame(t){
       ctx.fillStyle=g; ctx.fillRect(0,y-30,W,60); }
   } else {
     ctx.fillStyle="rgba(20,30,45,.18)"; ctx.fillRect(0,0,W,H);
+    for (let i=0;i<3;i++) cloud(W*(.15+i*.3), 38+(i%2)*14, 1.1, "#B9C0C8");
     ctx.strokeStyle="rgba(200,220,235,.55)"; ctx.lineWidth=1;
     drops.forEach(d=>{ ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x-2,d.y+9); ctx.stroke();
       if(!reduce){ d.y+=d.v; d.x-=.6; if(d.y>H){d.y=-10;d.x=Math.random()*W;} } });
